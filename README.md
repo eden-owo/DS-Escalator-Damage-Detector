@@ -49,7 +49,7 @@ cd DeepStream-Yolo-Pose
 
 Export the CUDA_VER env according to your DeepStream version and platform:
 
-* DeepStream 7.1 on x86 platform
+* DeepStream 7.1 on x86_64 linux platform
 
   ```
   export CUDA_VER=12.6
@@ -64,7 +64,7 @@ Export the CUDA_VER env according to your DeepStream version and platform:
 
 ### 4. Python Bindings
 
-  DeepStream 7.1 (x86): included in bootstrap.sh
+  DeepStream 7.1 (x86_64): included in bootstrap.sh
 
   DeepStream ≤6.3: install pyds from  `NVIDIA-AI-IOT/deepstream_python_apps` 
 
