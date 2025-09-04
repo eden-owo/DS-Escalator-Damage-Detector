@@ -18,8 +18,8 @@ NVIDIA DeepStream SDK application for YOLO-Pose models (Updated for DeepStream 7
 ## Setup
 
 ### 1. Run in Docker
-> Prerequisites: NVIDIA 驅動、Docker、`nvidia-container-toolkit` 已安裝並可使用 GPU。  
-> 若需顯示視窗（X11），執行：`xhost +local:root`（測試完可用 `xhost -local:root` 收回）。
+> Prerequisites: NVIDIA driver, Docker, and nvidia-container-toolkit must be installed with GPU support.
+> For X11 display, run: xhost +local:root (use xhost -local:root to revoke after testing).
 
 
 ```bash
