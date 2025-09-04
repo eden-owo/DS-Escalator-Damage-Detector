@@ -10,6 +10,7 @@ import platform
 from ctypes import *
 
 sys.path.append('/opt/nvidia/deepstream/deepstream/lib')
+Gst.init(None)
 import pyds
 
 MAX_ELEMENTS_IN_DISPLAY_META = 16
@@ -223,7 +224,7 @@ def create_uridecode_bin(stream_id, uri, streammux):
     bin_name = 'source-bin-%04d' % stream_id
     bin = Gst.ElementFactory.make('uridecodebin', bin_name)
     if 'rtsp://' in uri:
-        pyds.configure_source_for_ntp_sync(bin)
+        pyds.configure_source_for_ntp_sync(hash(bin))
     bin.set_property('uri', uri)
     pad_name = 'sink_%u' % stream_id
     streammux_sink_pad = streammux.get_request_pad(pad_name)
@@ -254,7 +255,7 @@ def is_aarch64():
 
 
 def main():
-    Gst.init(None)
+    
 
     loop = GLib.MainLoop()
 
@@ -322,7 +323,7 @@ def main():
     streammux.set_property('batched-push-timeout', 25000)
     streammux.set_property('width', STREAMMUX_WIDTH)
     streammux.set_property('height', STREAMMUX_HEIGHT)
-    streammux.set_property('enable-padding', 0)
+    streammux.set_property('enable-padding', 1)
     streammux.set_property('live-source', 1)
     streammux.set_property('attach-sys-ts', 1)
     pgie.set_property('config-file-path', CONFIG_INFER)
