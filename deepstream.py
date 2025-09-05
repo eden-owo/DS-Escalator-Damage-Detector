@@ -18,8 +18,8 @@ MAX_ELEMENTS_IN_DISPLAY_META = 16
 SOURCE = ''
 CONFIG_INFER = ''
 STREAMMUX_BATCH_SIZE = 1
-STREAMMUX_WIDTH = 1920
-STREAMMUX_HEIGHT = 1080
+STREAMMUX_WIDTH = 720
+STREAMMUX_HEIGHT = 1280
 GPU_ID = 0
 PERF_MEASUREMENT_INTERVAL_SEC = 5
 
@@ -404,8 +404,8 @@ def parse_args():
     parser.add_argument('-s', '--source', required=True, help='Source stream/file')
     parser.add_argument('-c', '--config-infer', required=True, help='Config infer file')
     parser.add_argument('-b', '--streammux-batch-size', type=int, default=1, help='Streammux batch-size (default: 1)')
-    parser.add_argument('-w', '--streammux-width', type=int, default=1920, help='Streammux width (default: 1920)')
-    parser.add_argument('-e', '--streammux-height', type=int, default=1080, help='Streammux height (default: 1080)')
+    parser.add_argument('-w', '--streammux-width', type=int, default=720, help='Streammux width (default: 1920)')
+    parser.add_argument('-e', '--streammux-height', type=int, default=1280, help='Streammux height (default: 1080)')
     parser.add_argument('-g', '--gpu-id', type=int, default=0, help='GPU id (default: 0)')
     parser.add_argument('-f', '--fps-interval', type=int, default=5, help='FPS measurement interval (default: 5)')
     args = parser.parse_args()
