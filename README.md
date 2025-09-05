@@ -1,6 +1,6 @@
 # DeepStream-Yolo-Pose (DeepStream 7.1)
 
-NVIDIA DeepStream SDK application for YOLO-Pose models (Updated for DeepStream 7.1 and yolo11-pose)
+NVIDIA DeepStream SDK application for YOLO-Pose models (Updated for DeepStream 7.1 and YOLO11-Pose)
 
 
 > - YOLO objetct detection models and other infos: https://github.com/marcoslucianops/DeepStream-Yolo
@@ -18,11 +18,24 @@ NVIDIA DeepStream SDK application for YOLO-Pose models (Updated for DeepStream 7
 
 ## Setup
 
-### 1. Run in Docker
-> Prerequisites: NVIDIA driver, Docker, and nvidia-container-toolkit must be installed with GPU support.
-> For X11 display, run: xhost +local:root (use xhost -local:root to revoke after testing).
+### 1. Download the DeepStream-Yolo-Pose repo
 
+Clone the repository and set environment.
 
+```
+git clone https://github.com/eden-owo/DeepStream-Yolo-Pose.git
+cd DeepStream-Yolo-Pose
+```
+
+### 2. Run in Docker
+Prerequisites: NVIDIA driver, Docker, and nvidia-container-toolkit must be installed with GPU support.
+
+(Optional) For X11 display, run: xhost +local:root (use xhost -local:root to revoke after testing).
+```bash
+xhost +local:root
+```
+
+Launch the Container
 ```bash
 docker run -it --privileged --rm \
   --net=host --ipc=host --gpus all \
@@ -36,13 +49,9 @@ docker run -it --privileged --rm \
   bash
 ```
 
-### 2. Download the DeepStream-Yolo-Pose repo
+Run the setup script to install dependencies inside the container.
 
-After entering container, clone the repository and set environment.
-
-```
-git clone https://github.com/eden-owo/DeepStream-Yolo-Pose.git
-cd DeepStream-Yolo-Pose
+```bash
 /apps/bootstrap.sh
 ```
 
