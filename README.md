@@ -1,6 +1,6 @@
 # DeepStream-Yolo-Pose (DeepStream 7.1)
 
-NVIDIA DeepStream SDK application for YOLO-Pose models (Updated for DeepStream 7.1)
+NVIDIA DeepStream SDK application for YOLO-Pose models (Updated for DeepStream 7.1 and yolo11-pose)
 
 
 > - YOLO objetct detection models and other infos: https://github.com/marcoslucianops/DeepStream-Yolo
@@ -12,6 +12,7 @@ NVIDIA DeepStream SDK application for YOLO-Pose models (Updated for DeepStream 7
 ## Verified models
 
 * [YOLOv8-Pose](https://github.com/ultralytics/ultralytics)
+* [YOLO11-Pose](https://github.com/ultralytics/ultralytics)
 
 ---
 
@@ -75,13 +76,13 @@ Export the CUDA_VER env according to your DeepStream version and platform:
 * C code
 
   ```
-  ./deepstream -s file:///opt/nvidia/deepstream/deepstream/samples/streams/sample_1080p_h264.mp4 -c config_infer_primary_yoloV8_pose.txt
+  ./deepstream -s file:///opt/nvidia/deepstream/deepstream/samples/streams/sample_1080p_h264.mp4 -c config_infer_primary_yolo11_pose.txt
   ```
 
 * Python code
 
   ```
-  python3 deepstream.py -s file:///opt/nvidia/deepstream/deepstream/samples/streams/sample_1080p_h264.mp4 -c config_infer_primary_yoloV8_pose.txt
+  python3 deepstream.py -s file:///opt/nvidia/deepstream/deepstream/samples/streams/sample_1080p_h264.mp4 -c config_infer_primary_yolo11_pose.txt
   ```
 
 **NOTE**: The TensorRT engine file may take a very long time to generate (sometimes more than 10 minutes).
