@@ -20,13 +20,13 @@ NVIDIA DeepStream SDK application for YOLO-Pose models (Updated for DeepStream 7
 
 ## Setup
 
-### 1. Download the DeepStream-Yolo-Pose repo
+### 1. Download the Deepstream-Yolo-Fall-Detection repo
 
 Clone the repository and set environment.
 
 ```
 git clone https://github.com/eden-owo/Deepstream-yolo-fall-detection.git
-cd DeepStream-Yolo-Pose
+cd Deepstream-yolo-fall-detection
 ```
 
 ### 2. Run in Docker
