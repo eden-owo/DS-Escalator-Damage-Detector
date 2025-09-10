@@ -1,11 +1,13 @@
-# DeepStream-Yolo-Pose (DeepStream 7.1)
+# Deepstream-Yolo-Fall-Detection (DeepStream 7.1)
 
 NVIDIA DeepStream SDK application for YOLO-Pose models (Updated for DeepStream 7.1 and YOLO11-Pose)
 
 
-> - YOLO objetct detection models and other infos: https://github.com/marcoslucianops/DeepStream-Yolo
+> This is a continued implementation of the original project, updated to support DeepStream 7.1 and YOLO11-Pose.
 
-> - Original YOLO-Pose models for DeepStream SDK 6.3 / 6.2 / 6.1.1 / 6.1 / 6.0.1 / 6.0: https://github.com/marcoslucianops/DeepStream-Yolo-Pose
+> YOLO objetct detection models and other infos: https://github.com/marcoslucianops/DeepStream-Yolo
+
+> Original YOLO-Pose models for DeepStream SDK 6.3 / 6.2 / 6.1.1 / 6.1 / 6.0.1 / 6.0: https://github.com/marcoslucianops/DeepStream-Yolo-Pose
 
 ---
 
@@ -23,7 +25,7 @@ NVIDIA DeepStream SDK application for YOLO-Pose models (Updated for DeepStream 7
 Clone the repository and set environment.
 
 ```
-git clone https://github.com/eden-owo/DeepStream-Yolo-Pose.git
+git clone https://github.com/eden-owo/Deepstream-yolo-fall-detection.git
 cd DeepStream-Yolo-Pose
 ```
 
@@ -79,8 +81,12 @@ Export the CUDA_VER env according to your DeepStream version and platform:
   DeepStream ≤6.3: install pyds from  `NVIDIA-AI-IOT/deepstream_python_apps` 
 
 
+### 5. Prepare and Export the Model to ONNX
 
-### 5. Run
+Create a dedicated directory for the model, then follow [the documentation](./docs/) to set up the model and export it as an .onnx file.
+
+
+### 6. Run
 
 * C code
 
@@ -128,3 +134,18 @@ topk=300
 ## Reference: 
 * https://github.com/marcoslucianops/DeepStream-Yolo-Pose
 * https://github.com/NVIDIA-AI-IOT/deepstream_python_apps
+
+## Project Lineage
+
+This repository is a continuation of the unmaintained project  
+[marcoslucianops/DeepStream-Yolo-Pose](https://github.com/marcoslucianops/DeepStream-Yolo-Pose).
+
+- The **original upstream implementation** (for DeepStream 6.0–6.3) is preserved in branch [`legacy-upstream`](https://github.com/eden-owo/DeepStream-Yolo-Pose/tree/legacy-upstream)  
+  and tagged as [`upstream-legacy-2023`](https://github.com/eden-owo/DeepStream-Yolo-Pose/releases/tag/upstream-legacy-2023).  
+  This keeps the original history intact for reference and reproducibility.
+
+- The **active development branch** is [`master`](https://github.com/eden-owo/DeepStream-Yolo-Pose/tree/master),  
+  updated for **DeepStream 7.1** and supporting newer models such as **YOLO11-Pose**.
+
+If you are looking for compatibility with DeepStream ≤ 6.3, please check the legacy branch/tag.  
+For DeepStream 7.1 and newer development, use this repository’s master branch.
