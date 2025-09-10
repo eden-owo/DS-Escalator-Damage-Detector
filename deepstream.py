@@ -11,6 +11,8 @@ from ctypes import *
 
 sys.path.append('/opt/nvidia/deepstream/deepstream/lib')
 Gst.init(None)
+import math
+from collections import defaultdict
 import pyds
 
 MAX_ELEMENTS_IN_DISPLAY_META = 16
@@ -23,11 +25,46 @@ STREAMMUX_HEIGHT = 1280
 GPU_ID = 0
 PERF_MEASUREMENT_INTERVAL_SEC = 5
 
+try:
+    UNTRACKED_OID = pyds.UNTRACKED_OBJECT_ID
+except Exception:
+    UNTRACKED_OID = 0xFFFFFFFFFFFFFFFF  # DeepStream 未追蹤時常見值
+
 skeleton = [[16, 14], [14, 12], [17, 15], [15, 13], [12, 13], [6, 12], [7, 13], [6, 7], [6, 8], [7, 9], [8, 10], [9, 11],
             [2, 3], [1, 2], [1, 3], [2, 4], [3, 5], [4, 6], [5, 7]]
 
 start_time = time.time()
 fps_streams = {}
+
+CONF_THR = 0.5           # 關鍵點最低信心
+DETECT_DEGREE = 45.0     # 觸發門檻（度）
+ALARM_KEEP_FRAMES = 30    # 保持紅框的幀數（去抖動）
+
+# 以追蹤 ID 累計/衰減警報的 frame 計數
+alarm_counter = defaultdict(int)
+
+# COCO 0-based 索引
+IDX = {"LS": 5, "RS": 6, "LH": 11, "RH": 12}
+
+def angle_between(v1, v2):
+    x1,y1 = v1; x2,y2 = v2
+    n1 = math.hypot(x1,y1); n2 = math.hypot(x2,y2)
+    if n1 == 0 or n2 == 0: return None
+    cosv = max(-1.0, min(1.0, (x1*x2 + y1*y2)/(n1*n2)))
+    return math.degrees(math.acos(cosv))
+
+def side_tilt_degree(kps, side: str, conf_thr=0.5):
+    """side ∈ {'L','R'}，回傳 該側(髖→肩)向量對垂直(0,-1)的角度；若關鍵點缺失則回 None"""
+    if side == 'L':
+        s, h = IDX["LS"], IDX["LH"]
+    else:
+        s, h = IDX["RS"], IDX["RH"]
+    if s >= len(kps) or h >= len(kps): return None
+    xs, ys, cs = kps[s]; xh, yh, ch = kps[h]
+    if cs < conf_thr or ch < conf_thr: return None
+    v = (xs - xh, ys - yh)              # 髖->肩
+    return angle_between(v, (0.0, -1.0))  # 與垂直向上的角度
+
 
 
 class GETFPS:
@@ -59,8 +96,8 @@ class GETFPS:
 
 
 def set_custom_bbox(obj_meta):
-    border_width = 6
-    font_size = 18
+    border_width = 0 #6 
+    font_size = 0 #18
     x_offset = int(min(STREAMMUX_WIDTH - 1, max(0, obj_meta.rect_params.left - (border_width / 2))))
     y_offset = int(min(STREAMMUX_HEIGHT - 1, max(0, obj_meta.rect_params.top - (font_size * 2) + 1)))
 
@@ -85,17 +122,21 @@ def set_custom_bbox(obj_meta):
 
 
 def parse_pose_from_meta(frame_meta, obj_meta):
+    # 讀取關鍵點數量
     num_joints = int(obj_meta.mask_params.size / (sizeof(c_float) * 3))
 
+    # 還原 letterbox（把模型輸入座標轉回原圖座標）
     gain = min(obj_meta.mask_params.width / STREAMMUX_WIDTH,
                obj_meta.mask_params.height / STREAMMUX_HEIGHT)
     pad_x = (obj_meta.mask_params.width - STREAMMUX_WIDTH * gain) / 2.0
     pad_y = (obj_meta.mask_params.height - STREAMMUX_HEIGHT * gain) / 2.0
 
+    # 向 DeepStream 的 display meta 池子要一個 display_meta 來畫圖形
     batch_meta = frame_meta.base_meta.batch_meta
     display_meta = pyds.nvds_acquire_display_meta_from_pool(batch_meta)
     pyds.nvds_add_display_meta_to_frame(frame_meta, display_meta)
 
+    # 第一個 for：畫「關鍵點（圓）」
     for i in range(num_joints):
         data = obj_meta.mask_params.get_mask_array()
         xc = int((data[i * 3 + 0] - pad_x) / gain)
@@ -105,10 +146,12 @@ def parse_pose_from_meta(frame_meta, obj_meta):
         if confidence < 0.5:
             continue
 
+        # 滿量就換新 display_meta：
         if display_meta.num_circles == MAX_ELEMENTS_IN_DISPLAY_META:
             display_meta = pyds.nvds_acquire_display_meta_from_pool(batch_meta)
             pyds.nvds_add_display_meta_to_frame(frame_meta, display_meta)
 
+        # 設定這個點的繪圖參數並遞增計數
         circle_params = display_meta.circle_params[display_meta.num_circles]
         circle_params.xc = xc
         circle_params.yc = yc
@@ -123,7 +166,8 @@ def parse_pose_from_meta(frame_meta, obj_meta):
         circle_params.bg_color.blue = 1.0
         circle_params.bg_color.alpha = 1.0
         display_meta.num_circles += 1
-
+    
+    # 第二個 for：畫「骨架連線（線）」
     for i in range(num_joints + 2):
         data = obj_meta.mask_params.get_mask_array()
         x1 = int((data[(skeleton[i][0] - 1) * 3 + 0] - pad_x) / gain)
@@ -153,6 +197,152 @@ def parse_pose_from_meta(frame_meta, obj_meta):
         display_meta.num_lines += 1
 
 
+
+def extract_keypoints(obj_meta, stream_w, stream_h, conf_thr=None):
+    """
+    從 obj_meta.mask_params 取回 (x, y, conf) 關鍵點，並轉到 nvstreammux 的座標系。
+    - stream_w/stream_h: 你的 STREAMMUX_WIDTH/HEIGHT
+    - conf_thr: 若給值（例如 0.5），會先把低信心點濾掉
+    回傳: list[(x: float, y: float, conf: float)]
+    """
+    mp = obj_meta.mask_params
+    if mp.size == 0:
+        return []
+
+    data = mp.get_mask_array()  # 連續 float: x0,y0,c0, x1,y1,c1, ...
+    num_floats = mp.size // sizeof(c_float)
+    if num_floats % 3 != 0:
+        # 不是 (x,y,conf)*N 這種結構就放棄
+        return []
+    num_joints = num_floats // 3
+
+    # 反 letterbox：把模型座標還原到 streammux 影像座標
+    if stream_w == 0 or stream_h == 0:
+        return []
+    gain = min(mp.width / float(stream_w), mp.height / float(stream_h))
+    if gain <= 0:
+        return []
+    pad_x = (mp.width  - stream_w * gain) / 2.0
+    pad_y = (mp.height - stream_h * gain) / 2.0
+
+    kps = []
+    for i in range(num_joints):
+        rx = float(data[i*3 + 0])  # 模型座標 x
+        ry = float(data[i*3 + 1])  # 模型座標 y
+        c  = float(data[i*3 + 2])
+
+        if conf_thr is not None and c < conf_thr:
+            continue
+
+        x = (rx - pad_x) / gain
+        y = (ry - pad_y) / gain
+
+        # 夾在影像範圍（避免 OSD 越界）
+        x = max(0.0, min(float(stream_w  - 1), x))
+        y = max(0.0, min(float(stream_h - 1), y))
+
+        # 保留浮點精度；真正畫圖時再 int()
+        kps.append((x, y, c))
+
+    return kps
+
+
+
+def draw_pose_and_get_kps(frame_meta, obj_meta):
+    # 直接沿用你原本的畫點 / 畫線邏輯，只是先把 kps 算好回傳
+    kps = extract_keypoints(obj_meta, STREAMMUX_WIDTH, STREAMMUX_HEIGHT, conf_thr=0)
+
+    batch_meta = frame_meta.base_meta.batch_meta
+    display_meta = pyds.nvds_acquire_display_meta_from_pool(batch_meta)
+    pyds.nvds_add_display_meta_to_frame(frame_meta, display_meta)
+
+    # 畫關鍵點
+    # for (xc, yc, c) in kps:
+    #     if c < 0.5:
+    #         continue
+    #     if display_meta.num_circles == MAX_ELEMENTS_IN_DISPLAY_META:
+    #         display_meta = pyds.nvds_acquire_display_meta_from_pool(batch_meta)
+    #         pyds.nvds_add_display_meta_to_frame(frame_meta, display_meta)
+    #     circle_params = display_meta.circle_params[display_meta.num_circles]
+    #     circle_params.xc = int(xc)
+    #     circle_params.yc = int(yc)
+    #     circle_params.radius = 6
+    #     circle_params.circle_color.red = 1.0
+    #     circle_params.circle_color.green = 1.0
+    #     circle_params.circle_color.blue = 1.0
+    #     circle_params.circle_color.alpha = 1.0
+    #     circle_params.has_bg_color = 1
+    #     circle_params.bg_color.red = 0.0
+    #     circle_params.bg_color.green = 0.0
+    #     circle_params.bg_color.blue = 1.0
+    #     circle_params.bg_color.alpha = 1.0
+    #     display_meta.num_circles += 1
+
+    # # 畫骨架線段（沿用你的 skeleton）
+    # for a, b in skeleton:
+    #     ia, ib = a - 1, b - 1
+    #     if ia >= len(kps) or ib >= len(kps):
+    #         continue
+    #     x1, y1, c1 = kps[ia]
+    #     x2, y2, c2 = kps[ib]
+    #     if c1 < 0.5 or c2 < 0.5:
+    #         continue
+    #     if display_meta.num_lines == MAX_ELEMENTS_IN_DISPLAY_META:
+    #         display_meta = pyds.nvds_acquire_display_meta_from_pool(batch_meta)
+    #         pyds.nvds_add_display_meta_to_frame(frame_meta, display_meta)
+    #     line_params = display_meta.line_params[display_meta.num_lines]
+    #     line_params.x1 = int(x1); line_params.y1 = int(y1)
+    #     line_params.x2 = int(x2); line_params.y2 = int(y2)
+    #     line_params.line_width = 6
+    #     line_params.line_color.red = 0.0
+    #     line_params.line_color.green = 0.0
+    #     line_params.line_color.blue = 1.0
+    #     line_params.line_color.alpha = 1.0
+    #     display_meta.num_lines += 1
+
+    return kps
+
+
+# ====== [ADD] 命中條件時覆蓋紅色骨架（節省元素：預設只畫線，不重畫點） ======
+def overlay_pose_with_color(frame_meta, kps, line_rgb=(1.0, 0.0, 0.0), draw_points=False, point_rgb=(1.0, 1.0, 1.0)):
+    batch_meta = frame_meta.base_meta.batch_meta
+    display_meta = pyds.nvds_acquire_display_meta_from_pool(batch_meta)
+    pyds.nvds_add_display_meta_to_frame(frame_meta, display_meta)
+
+    if draw_points:
+        for (x, y, c) in kps:
+            if c < CONF_THR:
+                continue
+            if display_meta.num_circles == MAX_ELEMENTS_IN_DISPLAY_META:
+                display_meta = pyds.nvds_acquire_display_meta_from_pool(batch_meta)
+                pyds.nvds_add_display_meta_to_frame(frame_meta, display_meta)
+            cp = display_meta.circle_params[display_meta.num_circles]
+            cp.xc = int(x); cp.yc = int(y); cp.radius = 6
+            cp.circle_color.red, cp.circle_color.green, cp.circle_color.blue = point_rgb
+            cp.circle_color.alpha = 1.0
+            cp.has_bg_color = 0
+            display_meta.num_circles += 1
+
+    for a, b in skeleton:
+        ia, ib = a-1, b-1
+        if ia >= len(kps) or ib >= len(kps): 
+            continue
+        x1, y1, c1 = kps[ia]; x2, y2, c2 = kps[ib]
+        if c1 < CONF_THR or c2 < CONF_THR:
+            continue
+        if display_meta.num_lines == MAX_ELEMENTS_IN_DISPLAY_META:
+            display_meta = pyds.nvds_acquire_display_meta_from_pool(batch_meta)
+            pyds.nvds_add_display_meta_to_frame(frame_meta, display_meta)
+        lp = display_meta.line_params[display_meta.num_lines]
+        lp.x1 = int(x1); lp.y1 = int(y1)
+        lp.x2 = int(x2); lp.y2 = int(y2)
+        lp.line_width = 6
+        lp.line_color.red, lp.line_color.green, lp.line_color.blue = line_rgb
+        lp.line_color.alpha = 1.0
+        display_meta.num_lines += 1
+# ====== [ADD] 結束 ======
+
+
 def tracker_src_pad_buffer_probe(pad, info, user_data):
     buf = info.get_buffer()
     batch_meta = pyds.gst_buffer_get_nvds_batch_meta(hash(buf))
@@ -173,8 +363,63 @@ def tracker_src_pad_buffer_probe(pad, info, user_data):
             except StopIteration:
                 break
 
-            parse_pose_from_meta(frame_meta, obj_meta)
+            kps = draw_pose_and_get_kps(frame_meta, obj_meta)
             set_custom_bbox(obj_meta)
+            
+            # ====== [ADD] 套用 body_degree 判斷 + 紅色覆蓋 ======
+            left_deg  = side_tilt_degree(kps, 'L', CONF_THR)
+            right_deg = side_tilt_degree(kps, 'R', CONF_THR)
+            left_line  = 1 if left_deg  is not None else 0
+            right_line = 1 if right_deg is not None else 0
+
+            if left_line == 0 and right_line == 0:
+                body_degree = None
+            elif left_line == 0:
+                body_degree = abs(right_deg)
+            elif right_line == 0:
+                body_degree = abs(left_deg)
+            else:
+                body_degree = abs(left_deg + right_deg) / 2.0
+
+            # 追蹤 ID（未追蹤則 -1：只做即時，不做累積）
+            oid = int(getattr(obj_meta, "object_id", -1))
+            tid = oid if oid not in (UNTRACKED_OID, 0, -1) else -1
+
+            # 累積/衰減警報保持幀
+            if body_degree is not None and body_degree >= DETECT_DEGREE:
+                if tid != -1:
+                    alarm_counter[tid] = ALARM_KEEP_FRAMES
+            else:
+                if tid != -1:
+                    alarm_counter[tid] = max(0, alarm_counter[tid] - 1)
+
+            triggered = (body_degree is not None and body_degree >= DETECT_DEGREE) or (tid != -1 and alarm_counter[tid] > 0)
+            if triggered:
+                # 覆蓋紅框
+                obj_meta.rect_params.border_color.red   = 1.0
+                obj_meta.rect_params.border_color.green = 0.0
+                obj_meta.rect_params.border_color.blue  = 0.0
+                obj_meta.rect_params.border_color.alpha = 1.0
+                obj_meta.rect_params.border_width = 8
+
+                # 疊一層紅色骨架（線），點可省略以節省元素
+                overlay_pose_with_color(frame_meta, kps, line_rgb=(1.0, 0.0, 0.0), draw_points=False)
+
+                # 顯示角度文字
+                if body_degree is not None:
+                    obj_meta.text_params.display_text = f'degree: {body_degree:.2f}'
+                    obj_meta.text_params.font_params.font_name = 'Ubuntu'
+                    obj_meta.text_params.font_params.font_size = 18
+                    obj_meta.text_params.font_params.font_color.red   = 1.0
+                    obj_meta.text_params.font_params.font_color.green = 1.0
+                    obj_meta.text_params.font_params.font_color.blue  = 1.0
+                    obj_meta.text_params.font_params.font_color.alpha = 1.0
+                    obj_meta.text_params.set_bg_clr = 1
+                    obj_meta.text_params.text_bg_clr.red   = 1.0
+                    obj_meta.text_params.text_bg_clr.green = 0.0
+                    obj_meta.text_params.text_bg_clr.blue  = 0.0
+                    obj_meta.text_params.text_bg_clr.alpha = 1.0
+            # ====== [ADD] 結束 ======
 
             try:
                 l_obj = l_obj.next
