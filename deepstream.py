@@ -500,26 +500,18 @@ def is_aarch64():
 
 
 def main():
-    
-
     loop = GLib.MainLoop()
-
     pipeline = Gst.Pipeline()
-    if not pipeline:
-        sys.stderr.write('ERROR: Failed to create pipeline\n')
-        sys.exit(1)
 
     streammux = Gst.ElementFactory.make('nvstreammux', 'nvstreammux')
     if not streammux:
         sys.stderr.write('ERROR: Failed to create nvstreammux\n')
         sys.exit(1)
-    pipeline.add(streammux)
 
     source_bin = create_uridecode_bin(0, SOURCE, streammux)
     if not source_bin:
         sys.stderr.write('ERROR: Failed to create source_bin\n')
         sys.exit(1)
-    pipeline.add(source_bin)
 
     pgie = Gst.ElementFactory.make('nvinfer', 'pgie')
     if not pgie:
@@ -529,6 +521,16 @@ def main():
     tracker = Gst.ElementFactory.make('nvtracker', 'nvtracker')
     if not tracker:
         sys.stderr.write('ERROR: Failed to create nvtracker\n')
+        sys.exit(1)
+
+    tee = Gst.ElementFactory.make("tee", "tee")
+    if not tee:
+        sys.stderr.write("ERROR: Failed to create tee\n")
+        sys.exit(1)
+
+    queue_osd = Gst.ElementFactory.make("queue", "queue_osd")
+    if not queue_osd:
+        sys.stderr.write("ERROR: Failed to create queue_osd\n")
         sys.exit(1)
 
     converter = Gst.ElementFactory.make('nvvideoconvert', 'nvvideoconvert')
@@ -604,15 +606,26 @@ def main():
         converter.set_property('gpu_id', GPU_ID)
         osd.set_property('gpu_id', GPU_ID)
 
-    pipeline.add(pgie)
-    pipeline.add(tracker)
-    pipeline.add(converter)
-    pipeline.add(osd)
-    pipeline.add(sink)
+    # 加入 pipeline
+    for elem in [streammux, source_bin, pgie, tracker, 
+                tee, queue_osd, converter, osd, sink]:
+                # queue_msg, msgconv, msgbroker]:
+        pipeline.add(elem)
 
     streammux.link(pgie)
     pgie.link(tracker)
-    tracker.link(converter)
+    tracker.link(tee)
+
+    # tee → queue_osd → converter → osd → sink
+    tee_osd_pad = tee.get_request_pad("src_%u")
+    queue_osd_sink_pad = queue_osd.get_static_pad("sink")
+    if not tee_osd_pad or not queue_osd_sink_pad:
+        sys.stderr.write("ERROR: Unable to get tee or queue pads\n")
+        sys.exit(1)
+
+    tee_osd_pad.link(queue_osd_sink_pad)
+
+    queue_osd.link(converter)
     converter.link(osd)
     osd.link(sink)
 

@@ -1,0 +1,46 @@
+# fast_app.py
+from fastapi import FastAPI, Request
+from fastapi.responses import JSONResponse
+import uvicorn
+import logging
+
+app = FastAPI()
+log = logging.getLogger("uvicorn.error")
+
+@app.post("/events")
+async def ingest_events(req: Request):
+    # DS REST adapter 可能送單筆或陣列；保守讀取
+    payload = await req.json()
+    events = payload if isinstance(payload, list) else [payload]
+
+    for e in events:
+        # 常見欄位（依 nvmsgconv DS schema）
+        sensorId   = e.get("sensorId")
+        trackingId = e.get("trackingId")
+        frameId    = e.get("frameId")
+        objType    = e.get("objType")        # e.g. "person"
+        ts         = e.get("ts")
+        bbox       = e.get("bbox", {})
+        # 我們放在 objSignature 的自定資訊（status/degree）
+        sig = e.get("objSignature", "") or ""
+        status = "unknown"
+        degree = None
+        for part in sig.split(";"):
+            if part.startswith("status="):
+                status = part.split("=",1)[1]
+            if part.startswith("degree="):
+                try:
+                    degree = float(part.split("=",1)[1])
+                except:
+                    degree = None
+
+        log.info(f"[DS] sid={sensorId} tid={trackingId} frame={frameId} status={status} degree={degree} bbox={bbox}")
+
+        # TODO: 在這裡做你要的動作：
+        # - 寫 DB / 推到 Kafka / 觸發 WebSocket 廣播 / LINE 通知 / Email...
+        # - 去重、冷卻時間（cooldown）、權限/場域過濾等
+
+    return JSONResponse({"ok": True, "count": len(events)})
+
+if __name__ == "__main__":
+    uvicorn.run("app:ingest_events", host="0.0.0.0", port=8000, reload=True)
