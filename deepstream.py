@@ -14,6 +14,7 @@ Gst.init(None)
 import math
 from collections import defaultdict
 import pyds
+import datetime
 
 MAX_ELEMENTS_IN_DISPLAY_META = 16
 
@@ -46,6 +47,91 @@ alarm_counter = defaultdict(int)
 # COCO 0-based 索引
 IDX = {"LS": 5, "RS": 6, "LH": 11, "RH": 12}
 
+# 事件發送節流（同一個 tracking ID 每 N 幀才送一次，避免刷頻）
+EMIT_GAP_FRAMES = 30
+_last_emit_frame = {}  # tid -> last_frame_num
+
+# --- fallback: convert signed/py-int to unsigned 64 for DeepStream trackingId ---
+def long_to_uint64(val):
+    if val is None:
+        return 0
+    try:
+        v = int(val)
+    except Exception:
+        return 0
+    # DeepStream 會用 uint64；未追蹤或負值就設 0
+    if v < 0:
+        return 0
+    return v & 0xFFFFFFFFFFFFFFFF
+
+def _attach_fall_event(batch_meta, frame_meta, obj_meta, body_degree, fall_state):
+    """把跌倒事件掛到該 frame 上，讓 nvmsgconv/nvmsgbroker 發出去。"""
+    # 1) 先拿一個 user meta 容器
+    user_event_meta = pyds.nvds_acquire_user_meta_from_pool(batch_meta)
+    if not user_event_meta:
+        print("[fall-event] acquire_user_meta_from_pool failed")
+        return False
+
+    # 2) 產生 NvDsEventMsgMeta
+    msg_meta = pyds.alloc_nvds_event_msg_meta(user_event_meta)
+
+    # 基本欄位
+    msg_meta.bbox.top    = obj_meta.rect_params.top
+    msg_meta.bbox.left   = obj_meta.rect_params.left
+    msg_meta.bbox.width  = obj_meta.rect_params.width
+    msg_meta.bbox.height = obj_meta.rect_params.height
+
+    msg_meta.frameId    = frame_meta.frame_num
+    msg_meta.trackingId = long_to_uint64(getattr(obj_meta, "object_id", 0))
+    msg_meta.confidence = float(max(0.0, min(1.0, obj_meta.confidence)))
+
+    # 補上來源資訊與時間戳
+    msg_meta.sensorId  = int(getattr(frame_meta, "source_id", 0))
+    msg_meta.placeId   = 0
+    msg_meta.moduleId  = 0
+    msg_meta.sensorStr = "sensor-{}".format(msg_meta.sensorId)
+
+    msg_meta.ts = pyds.alloc_buffer(33)
+    pyds.generate_ts_rfc3339(msg_meta.ts, 32)
+
+    # 設定類型與對象（以 PERSON 為例）
+    msg_meta.objType    = pyds.NvDsObjectType.NVDS_OBJECT_TYPE_PERSON
+    msg_meta.objClassId = int(getattr(obj_meta, "class_id", 0))
+    # 若有 CUSTOM 就用 CUSTOM，否則退回 ENTRY
+    try:
+        msg_meta.type = pyds.NvDsEventType.NVDS_EVENT_CUSTOM
+    except AttributeError:
+        msg_meta.type = pyds.NvDsEventType.NVDS_EVENT_ENTRY
+
+    # 3) “零 C++ 變更”的客製：用 NvDsPersonObject 的文字欄位帶出 fall/degree
+    person_ext = pyds.alloc_nvds_person_object()
+    person_ext = pyds.NvDsPersonObject.cast(person_ext)
+    person_ext.gender  = "unknown"
+    person_ext.cap     = "fall" if fall_state else "normal"
+    person_ext.hair    = "deg={:.2f}".format(body_degree) if body_degree is not None else "deg=NA"
+    person_ext.apparel = "fall=1" if fall_state else "fall=0"
+
+    msg_meta.extMsg     = person_ext
+    msg_meta.extMsgSize = sys.getsizeof(pyds.NvDsPersonObject)
+
+    # 4) 掛到當前 frame
+    user_event_meta.user_meta_data = msg_meta
+    user_event_meta.base_meta.meta_type = pyds.NvDsMetaType.NVDS_EVENT_MSG_META
+    pyds.nvds_add_user_meta_to_frame(frame_meta, user_event_meta)
+    return True
+
+
+def _should_emit(frame_num, tracking_id):
+    """簡單的 per-tracking 節流，避免每幀都發。未追蹤或 tid<0 就不節流。"""
+    if tracking_id <= 0:
+        return True
+    last = _last_emit_frame.get(tracking_id, -10**9)
+    if frame_num - last >= EMIT_GAP_FRAMES:
+        _last_emit_frame[tracking_id] = frame_num
+        return True
+    return False
+
+
 def angle_between(v1, v2):
     x1,y1 = v1; x2,y2 = v2
     n1 = math.hypot(x1,y1); n2 = math.hypot(x2,y2)
@@ -64,8 +150,6 @@ def side_tilt_degree(kps, side: str, conf_thr=0.5):
     if cs < conf_thr or ch < conf_thr: return None
     v = (xs - xh, ys - yh)              # 髖->肩
     return angle_between(v, (0.0, -1.0))  # 與垂直向上的角度
-
-
 
 class GETFPS:
     def __init__(self, stream_id):
@@ -355,6 +439,7 @@ def tracker_src_pad_buffer_probe(pad, info, user_data):
             break
 
         current_index = frame_meta.source_id
+        fall_state = 0   # 預設沒跌倒
 
         l_obj = frame_meta.obj_meta_list
         while l_obj:
@@ -395,6 +480,7 @@ def tracker_src_pad_buffer_probe(pad, info, user_data):
 
             triggered = (body_degree is not None and body_degree >= DETECT_DEGREE) or (tid != -1 and alarm_counter[tid] > 0)
             if triggered:
+                fall_state = 1
                 # 覆蓋紅框
                 obj_meta.rect_params.border_color.red   = 1.0
                 obj_meta.rect_params.border_color.green = 0.0
@@ -419,6 +505,21 @@ def tracker_src_pad_buffer_probe(pad, info, user_data):
                     obj_meta.text_params.text_bg_clr.green = 0.0
                     obj_meta.text_params.text_bg_clr.blue  = 0.0
                     obj_meta.text_params.text_bg_clr.alpha = 1.0
+            
+                # ===================== 這裡是新增的「事件掛載」 =====================
+                # 有追蹤 ID 就用它節流，沒有就不節流
+                tid_for_emit = tid if tid != -1 else 0
+                if _should_emit(frame_meta.frame_num, tid_for_emit):
+                    ok = _attach_fall_event(
+                        batch_meta=batch_meta,
+                        frame_meta=frame_meta,
+                        obj_meta=obj_meta,
+                        body_degree=body_degree,
+                        fall_state=True
+                    )
+                    if not ok:
+                        print("[fall-event] attach failed")
+                # ====================================================================
             # ====== [ADD] 結束 ======
 
             try:
@@ -426,6 +527,9 @@ def tracker_src_pad_buffer_probe(pad, info, user_data):
             except StopIteration:
                 break
 
+        # === 只要有跌倒，發送事件 ===
+        # if fall_state == 1:
+        #     print(" ")
         fps_streams['stream{0}'.format(current_index)].get_fps()
 
         try:
@@ -664,7 +768,7 @@ def main():
         sys.exit(1)
     
     msgconv.set_property("config", "/apps/msgconv/msgconv_config.txt")
-    msgconv.set_property("payload-type", 0)  # 0 = DeepStream schema, 1 = minimal schema
+    msgconv.set_property("payload-type", 1)  # 0 = DeepStream schema, 1 = minimal schema
 
     tee_msg_pad.link(queue_msg_sink_pad)
 
