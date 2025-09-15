@@ -1,0 +1,5 @@
+[message]
+enable=1
+msg2p-lib=/opt/nvidia/deepstream/deepstream/lib/libnvds_msg2p.so
+msg2p-config=/apps/msgconv/msg_conv_sample_config.txt
+topic=ds_topic

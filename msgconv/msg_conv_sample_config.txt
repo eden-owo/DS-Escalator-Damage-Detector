@@ -1,0 +1,7 @@
+[message]
+msg2p-schema-version=1.0
+msg2p-content=JSON
+msg2p-send-container=1
+msg2p-container-type=JSON
+msg2p-enable-event-msg=1
+msg2p-enable-ext-msg=0

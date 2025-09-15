@@ -555,6 +555,24 @@ def main():
             sys.stderr.write('ERROR: Failed to create nveglglessink\n')
             sys.exit(1)
 
+    # === msg pipeline ===
+    queue_msg = Gst.ElementFactory.make("queue", "queue_msg")
+    if not queue_msg:
+        sys.stderr.write("ERROR: Failed to create queue_msg\n")
+        sys.exit(1)
+
+    # 假設之後要接 msgconv / msgbroker，就可以這裡建立
+    msgconv = Gst.ElementFactory.make("nvmsgconv", "msgconv")
+    if not msgconv:
+        sys.stderr.write("ERROR: Failed to create msgconv\n")
+        sys.exit(1)
+
+    msgbroker = Gst.ElementFactory.make("nvmsgbroker", "msgbroker")
+    if not msgbroker:
+        sys.stderr.write("ERROR: Failed to create msgbroker\n")
+        sys.exit(1)
+
+
     sys.stdout.write('\n')
     sys.stdout.write('SOURCE: %s\n' % SOURCE)
     sys.stdout.write('CONFIG_INFER: %s\n' % CONFIG_INFER)
@@ -597,6 +615,10 @@ def main():
     if tracker.find_property('enable_past_frame') is not None:
         tracker.set_property('enable_past_frame', 1)
 
+    msgbroker.set_property("proto-lib", "/opt/nvidia/deepstream/deepstream/lib/libnvds_mqtt_proto.so")
+    msgbroker.set_property("conn-str", "localhost;1883;ds/events")  # broker_ip;port;topic
+    msgbroker.set_property("sync", False)
+
     if not is_aarch64():
         streammux.set_property('nvbuf-memory-type', 0)
         streammux.set_property('gpu_id', GPU_ID)
@@ -608,14 +630,15 @@ def main():
 
     # 加入 pipeline
     for elem in [streammux, source_bin, pgie, tracker, 
-                tee, queue_osd, converter, osd, sink]:
-                # queue_msg, msgconv, msgbroker]:
+                tee, queue_osd, converter, osd, sink,
+                queue_msg, msgconv, msgbroker]:
         pipeline.add(elem)
 
     streammux.link(pgie)
     pgie.link(tracker)
     tracker.link(tee)
 
+    # === osd pipeline ===
     # tee → queue_osd → converter → osd → sink
     tee_osd_pad = tee.get_request_pad("src_%u")
     queue_osd_sink_pad = queue_osd.get_static_pad("sink")
@@ -628,11 +651,33 @@ def main():
     queue_osd.link(converter)
     converter.link(osd)
     osd.link(sink)
+    # === osd pipeline ===
 
+    # === msg pipeline ===
+    # tee → queue_msg → msgconv → msgbroker
+    tee_msg_pad = tee.get_request_pad("src_%u")
+    # queue_msg.set_property("leaky", 2)        # 丟掉舊 buffer，防止阻塞
+    # queue_msg.set_property("max-size-buffers", 1)
+    queue_msg_sink_pad = queue_msg.get_static_pad("sink")
+    if not tee_msg_pad or not queue_msg_sink_pad:
+        sys.stderr.write("ERROR: Unable to get tee/msg queue pads\n")
+        sys.exit(1)
+    
+    msgconv.set_property("config", "/apps/msgconv/msgconv_config.txt")
+    msgconv.set_property("payload-type", 0)  # 0 = DeepStream schema, 1 = minimal schema
+
+    tee_msg_pad.link(queue_msg_sink_pad)
+
+    queue_msg.link(msgconv)
+    msgconv.link(msgbroker)
+    # === msg pipeline ===    
+
+    # 監聽 pipeline 的 bus，處理錯誤/結束訊息    
     bus = pipeline.get_bus()
     bus.add_signal_watch()
     bus.connect('message', bus_call, loop)
 
+    # 在 tracker 的 src pad 加 probe，方便存取 metadata (例如偵測框/追蹤資訊)
     tracker_src_pad = tracker.get_static_pad('src')
     if not tracker_src_pad:
         sys.stderr.write('ERROR: Failed to get tracker src pad\n')
@@ -640,17 +685,14 @@ def main():
     else:
         tracker_src_pad.add_probe(Gst.PadProbeType.BUFFER, tracker_src_pad_buffer_probe, 0)
 
+    # 啟動 pipeline，進入主迴圈 (loop.run)，直到 EOS 或錯誤才結束
     pipeline.set_state(Gst.State.PLAYING)
-
     sys.stdout.write('\n')
-
     try:
         loop.run()
     except:
         pass
-
     pipeline.set_state(Gst.State.NULL)
-
     sys.stdout.write('\n')
 
 
