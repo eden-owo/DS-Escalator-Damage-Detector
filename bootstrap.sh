@@ -23,7 +23,7 @@ fi
 # 安裝 ultralytics 與 onnx 家族
 cd /opt/ultralytics
 # pip install .
-pip install ultralytics==8.3.193
+# pip install ultralytics==8.3.193
 pip install onnx onnxslim onnxruntime
 
 # 安裝 pyds 與 numpy

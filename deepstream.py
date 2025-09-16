@@ -720,8 +720,13 @@ def main():
         tracker.set_property('enable_past_frame', 1)
 
     msgbroker.set_property("proto-lib", "/opt/nvidia/deepstream/deepstream/lib/libnvds_mqtt_proto.so")
-    msgbroker.set_property("conn-str", "localhost;1883;ds/events")  # broker_ip;port;topic
     msgbroker.set_property("sync", False)
+
+    # msgbroker.set_property("conn-str", "localhost;1883;ds/events")  # broker_ip;port;topic
+
+    msgbroker.set_property("conn-str", "mosq;1883;psmt-fall-pub")  # host;port;clientid
+    msgbroker.set_property("topic", "ds/events")                  # topic 分開指定
+
 
     if not is_aarch64():
         streammux.set_property('nvbuf-memory-type', 0)
