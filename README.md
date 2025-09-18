@@ -40,15 +40,15 @@ xhost +local:root
 Launch the Container
 ```bash
 docker run -it --privileged --rm \
-  --net=host --ipc=host --gpus all \
-  -e DISPLAY=$DISPLAY \
-  -e CUDA_CACHE_DISABLE=0 \
-  --device /dev/snd \
-  -v /tmp/.X11-unix/:/tmp/.X11-unix \
-  -v "$(pwd)":/apps \
-  -w /apps \
-  nvcr.io/nvidia/deepstream:7.1-triton-multiarch \
-  bash
+           --net=host --ipc=host --gpus all \
+           -e DISPLAY=$DISPLAY \
+           -e CUDA_CACHE_DISABLE=0 \
+           --device /dev/snd \
+           -v /tmp/.X11-unix/:/tmp/.X11-unix \
+           -v "$(pwd)":/apps \
+           -w /apps \
+           nvcr.io/nvidia/deepstream:7.1-triton-multiarch \
+           bash
 ```
 
 For MQTT network:
