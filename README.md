@@ -51,6 +51,21 @@ docker run -it --privileged --rm \
   bash
 ```
 
+For MQTT network:
+```bash
+docker run -it --privileged --rm \
+           --ipc=host --gpus all \
+           -e DISPLAY=$DISPLAY \
+           -e CUDA_CACHE_DISABLE=0 \
+           --device /dev/snd \
+           -v /tmp/.X11-unix/:/tmp/.X11-unix \
+           -v "$(pwd)":/apps \
+           --network ds-net \
+           -w /apps 
+           nvcr.io/nvidia/deepstream:7.1-triton-multiarch \
+           bash
+```
+
 Run the setup script to install dependencies inside the container.
 
 ```bash
