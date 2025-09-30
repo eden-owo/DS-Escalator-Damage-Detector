@@ -10,7 +10,7 @@ onnx-file=/apps/model/yolo11s-pose.onnx
 # 先註解或刪除舊 engine，避免拿到不同驅動/不同 shape 的舊快取
 # model-engine-file=/apps/model/yolo11s-pose.onnx_b1_gpu0_fp32.engine
 model-engine-file=/apps/model/yolo11s-pose.onnx_b1_gpu0_fp16.engine
-labelfile-path=/apps/labels.txt
+labelfile-path=/apps/labels_pose.txt
 batch-size=1
 
 # FP16 較穩且快（要 FP32 改回 0）
@@ -20,7 +20,7 @@ network-mode=2
 num-detected-classes=1
 interval=0
 gie-unique-id=1
-process-mode=1                 # primary
+process-mode=1                 # Primary
 
 # 目前使用 "instance mask + pose 解析" 路線，維持 network-type=3
 # （若未來改走「det 當 pgie、pose 當 sgie」再把這個改成 0）
@@ -30,7 +30,7 @@ network-type=3                 # 3 = instance-seg / mask 輸出
 infer-dims=3;640;640
 
 # Ultralytics ONNX 常見輸入名
-input-blob-name=images
+# input-blob-name=images
 
 # YOLO 的 cluster（NMS）
 cluster-mode=4
