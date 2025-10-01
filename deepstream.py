@@ -12,7 +12,7 @@ from ctypes import *
 sys.path.append('/opt/nvidia/deepstream/deepstream/lib')
 Gst.init(None)
 import math
-from collections import defaultdict
+from collections import deque, defaultdict
 import pyds
 import datetime
 import threading
@@ -39,7 +39,7 @@ skeleton = [[16, 14], [14, 12], [17, 15], [15, 13], [12, 13], [6, 12], [7, 13], 
 start_time = time.time()
 fps_streams = {}
 
-CONF_THR = 0.5           # 關鍵點最低信心
+CONF_THR = 0.7           # 關鍵點最低信心
 DETECT_DEGREE = 45.0     # 觸發門檻（度）
 ALARM_KEEP_FRAMES = 30    # 保持紅框的幀數（去抖動）
 
@@ -71,7 +71,7 @@ def _attach_fall_event(batch_meta, frame_meta, obj_meta, body_degree, fall_state
     # 1) 先拿一個 user meta 容器
     user_event_meta = pyds.nvds_acquire_user_meta_from_pool(batch_meta)
     if not user_event_meta:
-        print("[fall-event] acquire_user_meta_from_pool failed")
+        # print("[fall-event] acquire_user_meta_from_pool failed")
         return False
 
     # 2) 產生 NvDsEventMsgMeta
@@ -182,7 +182,7 @@ class GETFPS:
 
 
 def set_custom_bbox(obj_meta):
-    border_width = 0 #6 
+    border_width = 6 #6 
     font_size = 0 #18
     x_offset = int(min(STREAMMUX_WIDTH - 1, max(0, obj_meta.rect_params.left - (border_width / 2))))
     y_offset = int(min(STREAMMUX_HEIGHT - 1, max(0, obj_meta.rect_params.top - (font_size * 2) + 1)))
@@ -205,84 +205,6 @@ def set_custom_bbox(obj_meta):
     obj_meta.text_params.text_bg_clr.green = 0.0
     obj_meta.text_params.text_bg_clr.blue = 1.0
     obj_meta.text_params.text_bg_clr.alpha = 1.0
-
-
-def parse_pose_from_meta(frame_meta, obj_meta):
-    # 讀取關鍵點數量
-    num_joints = int(obj_meta.mask_params.size / (sizeof(c_float) * 3))
-
-    # 還原 letterbox（把模型輸入座標轉回原圖座標）
-    gain = min(obj_meta.mask_params.width / STREAMMUX_WIDTH,
-               obj_meta.mask_params.height / STREAMMUX_HEIGHT)
-    pad_x = (obj_meta.mask_params.width - STREAMMUX_WIDTH * gain) / 2.0
-    pad_y = (obj_meta.mask_params.height - STREAMMUX_HEIGHT * gain) / 2.0
-
-    # 向 DeepStream 的 display meta 池子要一個 display_meta 來畫圖形
-    batch_meta = frame_meta.base_meta.batch_meta
-    display_meta = pyds.nvds_acquire_display_meta_from_pool(batch_meta)
-    pyds.nvds_add_display_meta_to_frame(frame_meta, display_meta)
-
-    # 第一個 for：畫「關鍵點（圓）」
-    for i in range(num_joints):
-        data = obj_meta.mask_params.get_mask_array()
-        xc = int((data[i * 3 + 0] - pad_x) / gain)
-        yc = int((data[i * 3 + 1] - pad_y) / gain)
-        confidence = data[i * 3 + 2]
-
-        if confidence < 0.5:
-            continue
-
-        # 滿量就換新 display_meta：
-        if display_meta.num_circles == MAX_ELEMENTS_IN_DISPLAY_META:
-            display_meta = pyds.nvds_acquire_display_meta_from_pool(batch_meta)
-            pyds.nvds_add_display_meta_to_frame(frame_meta, display_meta)
-
-        # 設定這個點的繪圖參數並遞增計數
-        circle_params = display_meta.circle_params[display_meta.num_circles]
-        circle_params.xc = xc
-        circle_params.yc = yc
-        circle_params.radius = 6
-        circle_params.circle_color.red = 1.0
-        circle_params.circle_color.green = 1.0
-        circle_params.circle_color.blue = 1.0
-        circle_params.circle_color.alpha = 1.0
-        circle_params.has_bg_color = 1
-        circle_params.bg_color.red = 0.0
-        circle_params.bg_color.green = 0.0
-        circle_params.bg_color.blue = 1.0
-        circle_params.bg_color.alpha = 1.0
-        display_meta.num_circles += 1
-    
-    # 第二個 for：畫「骨架連線（線）」
-    for i in range(num_joints + 2):
-        data = obj_meta.mask_params.get_mask_array()
-        x1 = int((data[(skeleton[i][0] - 1) * 3 + 0] - pad_x) / gain)
-        y1 = int((data[(skeleton[i][0] - 1) * 3 + 1] - pad_y) / gain)
-        confidence1 = data[(skeleton[i][0] - 1) * 3 + 2]
-        x2 = int((data[(skeleton[i][1] - 1) * 3 + 0] - pad_x) / gain)
-        y2 = int((data[(skeleton[i][1] - 1) * 3 + 1] - pad_y) / gain)
-        confidence2 = data[(skeleton[i][1] - 1) * 3 + 2]
-
-        if confidence1 < 0.5 or confidence2 < 0.5:
-            continue
-
-        if display_meta.num_lines == MAX_ELEMENTS_IN_DISPLAY_META:
-            display_meta = pyds.nvds_acquire_display_meta_from_pool(batch_meta)
-            pyds.nvds_add_display_meta_to_frame(frame_meta, display_meta)
-
-        line_params = display_meta.line_params[display_meta.num_lines]
-        line_params.x1 = x1
-        line_params.y1 = y1
-        line_params.x2 = x2
-        line_params.y2 = y2
-        line_params.line_width = 6
-        line_params.line_color.red = 0.0
-        line_params.line_color.green = 0.0
-        line_params.line_color.blue = 1.0
-        line_params.line_color.alpha = 1.0
-        display_meta.num_lines += 1
-
-
 
 def extract_keypoints(obj_meta, stream_w, stream_h, conf_thr=None):
     """
@@ -341,50 +263,6 @@ def draw_pose_and_get_kps(frame_meta, obj_meta):
     batch_meta = frame_meta.base_meta.batch_meta
     display_meta = pyds.nvds_acquire_display_meta_from_pool(batch_meta)
     pyds.nvds_add_display_meta_to_frame(frame_meta, display_meta)
-
-    # 畫關鍵點
-    # for (xc, yc, c) in kps:
-    #     if c < 0.5:
-    #         continue
-    #     if display_meta.num_circles == MAX_ELEMENTS_IN_DISPLAY_META:
-    #         display_meta = pyds.nvds_acquire_display_meta_from_pool(batch_meta)
-    #         pyds.nvds_add_display_meta_to_frame(frame_meta, display_meta)
-    #     circle_params = display_meta.circle_params[display_meta.num_circles]
-    #     circle_params.xc = int(xc)
-    #     circle_params.yc = int(yc)
-    #     circle_params.radius = 6
-    #     circle_params.circle_color.red = 1.0
-    #     circle_params.circle_color.green = 1.0
-    #     circle_params.circle_color.blue = 1.0
-    #     circle_params.circle_color.alpha = 1.0
-    #     circle_params.has_bg_color = 1
-    #     circle_params.bg_color.red = 0.0
-    #     circle_params.bg_color.green = 0.0
-    #     circle_params.bg_color.blue = 1.0
-    #     circle_params.bg_color.alpha = 1.0
-    #     display_meta.num_circles += 1
-
-    # # 畫骨架線段（沿用你的 skeleton）
-    # for a, b in skeleton:
-    #     ia, ib = a - 1, b - 1
-    #     if ia >= len(kps) or ib >= len(kps):
-    #         continue
-    #     x1, y1, c1 = kps[ia]
-    #     x2, y2, c2 = kps[ib]
-    #     if c1 < 0.5 or c2 < 0.5:
-    #         continue
-    #     if display_meta.num_lines == MAX_ELEMENTS_IN_DISPLAY_META:
-    #         display_meta = pyds.nvds_acquire_display_meta_from_pool(batch_meta)
-    #         pyds.nvds_add_display_meta_to_frame(frame_meta, display_meta)
-    #     line_params = display_meta.line_params[display_meta.num_lines]
-    #     line_params.x1 = int(x1); line_params.y1 = int(y1)
-    #     line_params.x2 = int(x2); line_params.y2 = int(y2)
-    #     line_params.line_width = 6
-    #     line_params.line_color.red = 0.0
-    #     line_params.line_color.green = 0.0
-    #     line_params.line_color.blue = 1.0
-    #     line_params.line_color.alpha = 1.0
-    #     display_meta.num_lines += 1
 
     return kps
 
@@ -449,6 +327,46 @@ def tracker_src_pad_buffer_probe(pad, info, user_data):
                 obj_meta = pyds.NvDsObjectMeta.cast(l_obj.data)
             except StopIteration:
                 break
+            
+            # --- 顯示 suitcase：允許在 OSD 畫出來 ---
+            label = (obj_meta.obj_label or "").lower()
+            is_suitcase = (obj_meta.class_id == 28) or (label == "suitcase")
+            if is_suitcase:
+                # 正確的 f-string
+                print(f"class={obj_meta.class_id}: confidence={obj_meta.confidence:.2f}")
+
+                # 顯示一個細框 + 文字
+                conf = float(getattr(obj_meta, "confidence", 0.0))
+                obj_meta.text_params.display_text = f"suitcase {conf:.2f}"
+
+                obj_meta.rect_params.border_width = 4
+                obj_meta.rect_params.has_bg_color = 0
+                obj_meta.rect_params.border_color.alpha = 1.0  # 不透明
+
+                if conf < 0.3:
+                    # 綠框
+                    obj_meta.rect_params.border_color.red = 0.0
+                    obj_meta.rect_params.border_color.green = 1.0
+                    obj_meta.rect_params.border_color.blue = 0.0
+                else:
+                    # 黃框
+                    obj_meta.rect_params.border_color.red = 1.0
+                    obj_meta.rect_params.border_color.green = 1.0
+                    obj_meta.rect_params.border_color.blue = 0.0
+
+                # 若你的 nvosd 會畫 mask，又不想顯示遮罩，可加上保險：
+                try:
+                    obj_meta.mask_params.is_mask = 0
+                except Exception:
+                    pass
+
+                l_obj = l_obj.next
+                continue
+            # ----------------------------------------
+
+
+            obj_meta.rect_params.border_width = 0
+            obj_meta.text_params.display_text = ''
 
             kps = draw_pose_and_get_kps(frame_meta, obj_meta)
             set_custom_bbox(obj_meta)
@@ -488,7 +406,7 @@ def tracker_src_pad_buffer_probe(pad, info, user_data):
                 obj_meta.rect_params.border_color.green = 0.0
                 obj_meta.rect_params.border_color.blue  = 0.0
                 obj_meta.rect_params.border_color.alpha = 1.0
-                obj_meta.rect_params.border_width = 8
+                obj_meta.rect_params.border_width = 4
 
                 # 疊一層紅色骨架（線），點可省略以節省元素
                 overlay_pose_with_color(frame_meta, kps, line_rgb=(1.0, 0.0, 0.0), draw_points=False)
@@ -497,7 +415,7 @@ def tracker_src_pad_buffer_probe(pad, info, user_data):
                 if body_degree is not None:
                     obj_meta.text_params.display_text = f'degree: {body_degree:.2f}'
                     obj_meta.text_params.font_params.font_name = 'Ubuntu'
-                    obj_meta.text_params.font_params.font_size = 18
+                    obj_meta.text_params.font_params.font_size = 12
                     obj_meta.text_params.font_params.font_color.red   = 1.0
                     obj_meta.text_params.font_params.font_color.green = 1.0
                     obj_meta.text_params.font_params.font_color.blue  = 1.0
@@ -603,9 +521,6 @@ def bus_call(bus, message, user_data):
 
 def is_aarch64():
     return platform.uname()[4] == 'aarch64'
-
-
-
 
 def main():
     loop = GLib.MainLoop()
@@ -734,6 +649,8 @@ def main():
                          '/opt/nvidia/deepstream/deepstream/samples/configs/deepstream-app/config_tracker_NvDCF_perf.yml')
     tracker.set_property('display-tracking-id', 1)
     tracker.set_property('qos', 0)
+    osd.set_property("display-bbox", 1)
+    osd.set_property("display-text", 1)
     osd.set_property('process-mode', int(pyds.MODE_GPU))
     osd.set_property('qos', 0)
     sink.set_property('async', 0)
@@ -815,8 +732,6 @@ def main():
     # === msg pipeline ===
     # tee → queue_msg → msgconv → msgbroker
     tee_msg_pad = tee.get_request_pad("src_%u")
-    # queue_msg.set_property("leaky", 2)        # 丟掉舊 buffer，防止阻塞
-    # queue_msg.set_property("max-size-buffers", 1)
     queue_msg_sink_pad = queue_msg.get_static_pad("sink")
     if not tee_msg_pad or not queue_msg_sink_pad:
         sys.stderr.write("ERROR: Unable to get tee/msg queue pads\n")
@@ -840,66 +755,49 @@ def main():
     if not queue_det.link(pgie_det): sys.exit(1)
     if not pgie_det.link(queue_det_out): sys.exit(1)
     if not queue_det_out.link(fakesink_det): sys.exit(1)
-    # ---- 掛 probe：收集 det 物件、在 tracker 前合併 ----
-    _det_cache = {}
-    _det_lock  = threading.Lock()
 
-    def collect_det_probe(pad, info, udata):
+    def osd_sink_probe(pad, info, udata):
+        # 過濾與控制 OSD 顯示內容的 probe callback:
+        # 只允許特定物件在 OSD 顯示
+        # 1. 行李箱 (suitcase) → 顯示
+        # 2. 跌倒警示紅框的人 → 顯示
+        # 3. 其他物件 (人、車、動物…等) → 全部隱藏，不畫框也不顯示文字
         buf = info.get_buffer()
         if not buf: return Gst.PadProbeReturn.OK
-        batch_meta = pyds.gst_buffer_get_nvds_batch_meta(hash(buf))
-        l_frame = batch_meta.frame_meta_list
+        bm = pyds.gst_buffer_get_nvds_batch_meta(hash(buf))
+        l_frame = bm.frame_meta_list
         while l_frame:
-            fmeta = pyds.NvDsFrameMeta.cast(l_frame.data)
-            dets = []
-            l_obj = fmeta.obj_meta_list
+            f = pyds.NvDsFrameMeta.cast(l_frame.data)
+            l_obj = f.obj_meta_list
             while l_obj:
-                obj = pyds.NvDsObjectMeta.cast(l_obj.data)
-                dets.append((
-                    obj.rect_params.left, obj.rect_params.top,
-                    obj.rect_params.width, obj.rect_params.height,
-                    obj.class_id, obj.confidence
-                ))
+                o = pyds.NvDsObjectMeta.cast(l_obj.data)
+                # 允許條件：
+                # 1) 行李箱 (class_id==28 或 label 'suitcase') → 保留，讓 OSD 畫出來
+                # 2) 跌倒者（我們在觸發時把 border_width 設為 0 並且是紅色）→ 保留
+                is_suitcase = (o.class_id == 28) or ((o.obj_label or '').lower() == 'suitcase')
+                is_fall_red = (o.rect_params.border_width >= 0 and 
+                            o.rect_params.border_color.red >= 0.99 and 
+                            o.rect_params.border_color.green <= 0.01 and 
+                            o.rect_params.border_color.blue <= 0.01)
+                if is_suitcase:
+                    conf = float(getattr(o, "confidence", 0.0))
+                if not (is_suitcase or is_fall_red):
+                    # 其餘一律關掉顯示
+                    o.rect_params.border_width = 0
+                    o.text_params.display_text = ''
                 l_obj = l_obj.next
-            if dets:
-                with _det_lock:
-                    _det_cache[(fmeta.source_id, fmeta.frame_num)] = dets
             l_frame = l_frame.next
         return Gst.PadProbeReturn.OK
 
-    def merge_before_tracker_probe(pad, info, udata):
-        buf = info.get_buffer()
-        if not buf: return Gst.PadProbeReturn.OK
-        batch_meta = pyds.gst_buffer_get_nvds_batch_meta(hash(buf))
-        l_frame = batch_meta.frame_meta_list
-        while l_frame:
-            fmeta = pyds.NvDsFrameMeta.cast(l_frame.data)
-            key = (fmeta.source_id, fmeta.frame_num)
-            with _det_lock:
-                dets = _det_cache.pop(key, None)
-            if dets:
-                for (x, y, w, h, cls, conf) in dets:
-                    om = pyds.nvds_acquire_obj_meta_from_pool(batch_meta)
-                    om.rect_params.left = x; om.rect_params.top = y
-                    om.rect_params.width = w; om.rect_params.height = h
-                    om.class_id = cls; om.confidence = conf
-                    om.unique_component_id = 2  # 來自 pgie_det
-                    pyds.nvds_add_obj_meta_to_frame(fmeta, om, None)
-            l_frame = l_frame.next
-        return Gst.PadProbeReturn.OK
-
-    pgie_det_src = pgie_det.get_static_pad('src')
-    pgie_det_src.add_probe(Gst.PadProbeType.BUFFER, collect_det_probe, 0)
-
-    pgie_pose_src = pgie_pose.get_static_pad('src')  # tracker 前
-    pgie_pose_src.add_probe(Gst.PadProbeType.BUFFER, merge_before_tracker_probe, 0)
+    osd_sink_pad = osd.get_static_pad("sink")
+    osd_sink_pad.add_probe(Gst.PadProbeType.BUFFER, osd_sink_probe, 0)
 
     # 在 tracker 的 src pad 加 probe，方便存取 metadata (例如偵測框/追蹤資訊)
     tracker_src_pad = tracker.get_static_pad('src')
     if not tracker_src_pad:
         sys.stderr.write('ERROR: Failed to get tracker src pad\n')
         sys.exit(1)
-    else:
+    else:   
         tracker_src_pad.add_probe(Gst.PadProbeType.BUFFER, tracker_src_pad_buffer_probe, 0)
 
     # 啟動 pipeline，進入主迴圈 (loop.run)，直到 EOS 或錯誤才結束
