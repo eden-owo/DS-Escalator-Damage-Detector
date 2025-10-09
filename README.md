@@ -1,18 +1,23 @@
-# Deepstream-Yolo-Fall-Detection (DeepStream 7.1)
+# DS-Escalator-Damage-Detector (DeepStream-based Escalator Damage Detection System)
 
-NVIDIA DeepStream SDK application for YOLO-Pose models (Updated for DeepStream 7.1 and YOLO11-Pose)
+Real-time **fall** and **suitcase drop** detection system built with **NVIDIA DeepStream 7.1** and **YOLO-Pose / YOLO-Seg**.  
+Supports multi-object tracking and event publishing via **MQTT** for edge-to-cloud integration.
 
-
-> This is a continued implementation of the original project, updated to support DeepStream 7.1 and YOLO11-Pose.
-
-> YOLO objetct detection models and other infos: https://github.com/marcoslucianops/DeepStream-Yolo
-
-> Original YOLO-Pose models for DeepStream SDK 6.3 / 6.2 / 6.1.1 / 6.1 / 6.0.1 / 6.0: https://github.com/marcoslucianops/DeepStream-Yolo-Pose
+### Features
+- 🧍‍♂️ Fall detection using YOLO-Pose keypoint analysis  
+- 🧳 Suitcase drop detection via object tracking and separation logic  
+- ⚙️ Optimized for Jetson Orin with TensorRT acceleration  
+- 🔔 MQTT message publishing for remote alerts
 
 ---
 
 ## Verified models
 
+Detection
+* [YOLOv8](https://github.com/ultralytics/ultralytics)
+* [YOLO11](https://github.com/ultralytics/ultralytics)
+
+Pose estimation
 * [YOLOv8-Pose](https://github.com/ultralytics/ultralytics)
 * [YOLO11-Pose](https://github.com/ultralytics/ultralytics)
 
@@ -20,16 +25,17 @@ NVIDIA DeepStream SDK application for YOLO-Pose models (Updated for DeepStream 7
 
 ## Setup
 
-### 1. Download the Deepstream-Yolo-Fall-Detection repo
+### 1. Clone the Repository
 
-Clone the repository and set environment.
+  Download the project and set up the working environment.
 
 ```
-git clone https://github.com/eden-owo/Deepstream-yolo-fall-detection.git
-cd Deepstream-yolo-fall-detection
+git clone https://github.com/eden-owo/DS-Escalator-Damage-Detector.git
+cd DS-Escalator-Damage-Detector
 ```
 
 ### 2. Run in Docker
+
 Prerequisites: NVIDIA driver, Docker, and nvidia-container-toolkit must be installed with GPU support.
 
 (Optional) For X11 display, run: xhost +local:root (use xhost -local:root to revoke after testing).
@@ -38,20 +44,6 @@ xhost +local:root
 ```
 
 Launch the Container
-```bash
-docker run -it --privileged --rm \
-           --net=host --ipc=host --gpus all \
-           -e DISPLAY=$DISPLAY \
-           -e CUDA_CACHE_DISABLE=0 \
-           --device /dev/snd \
-           -v /tmp/.X11-unix/:/tmp/.X11-unix \
-           -v "$(pwd)":/apps \
-           -w /apps \
-           nvcr.io/nvidia/deepstream:7.1-triton-multiarch \
-           bash
-```
-
-For MQTT network:
 ```bash
 docker run -it --privileged --rm \
            --ipc=host --gpus all \
@@ -74,7 +66,7 @@ Run the setup script to install dependencies inside the container.
 
 ### 3. Compile the libs
 
-Export the CUDA_VER env according to your DeepStream version and platform:
+  Export the CUDA_VER env according to your DeepStream version and platform:
 
 * DeepStream 7.1 on x86_64 linux platform
 
@@ -85,6 +77,7 @@ Export the CUDA_VER env according to your DeepStream version and platform:
 * Compile the libs
 
   ```
+  make -C nvdsinfer_custom_impl_Yolo
   make -C nvdsinfer_custom_impl_Yolo_pose
   make
   ```
@@ -93,23 +86,38 @@ Export the CUDA_VER env according to your DeepStream version and platform:
 
   DeepStream 7.1 (x86_64): included in bootstrap.sh
 
-  DeepStream ≤6.3: install pyds from  `NVIDIA-AI-IOT/deepstream_python_apps` 
-
 
 ### 5. Prepare and Export the Model to ONNX
 
-Create a dedicated directory for the model, then follow [the documentation](./docs/) to set up the model and export it as an .onnx file.
+  Create a dedicated directory for the model, then follow [the documentation](./docs/) to set up the model and export it as an .onnx file.
 
 
-### 6. Run
+### 6. Run MQTT Broker and Subscriber in separate Docker containers
 
-* C code
+  Before running the DeepStream application, start the MQTT broker and a subscriber for message monitoring.
+
+* MQTT Broker
+
+  ```  
+  docker run --name mosq \
+             --network ds-net \
+             -it --rm -p 1883:1883 \
+             -v "$PWD/mosquitto.conf:/mosquitto/config/mosquitto.conf" \
+             eclipse-mosquitto
+  ```
+
+* MQTT Subscriber
 
   ```
-  ./deepstream -s file:///opt/nvidia/deepstream/deepstream/samples/streams/sample_1080p_h264.mp4 -c config_infer_primary_yolo11_pose.txt
+  docker run --rm -it \
+             --network ds-net eclipse-mosquitto mosquitto_sub \
+             -h mosq -p 1883 \
+             -t ds/events -v
   ```
 
-* Python code
+### 7. Run deepstream.py as MQTT publisher
+
+  Run the main script (MQTT publisher) in the container from Step 2:
 
   ```
   python3 deepstream.py -s file:///opt/nvidia/deepstream/deepstream/samples/streams/sample_1080p_h264.mp4 -c config_infer_primary_yolo11_pose.txt
@@ -122,7 +130,8 @@ Options
 | Option | Example | Default | Description |
 |--------|---------|---------|-------------|
 | `-s`, `--source` | `rtsp://...` | – | Input source |
-| `-c`, `--config-infer` | `config_infer.txt` | – | Inference config file |
+| `-cip`, `--config-infer-pose` | `config_infer_pose.txt` | – | Inference config file of Pose Dsitmaion |
+| `-cid`, `--config-infer-detect` | `config_infer_detection.txt` | – | Inference config file of objection detection |
 | `-b`, `--streammux-batch-size` | `2` | `1` | Batch size |
 | `-w`, `--streammux-width` | `1280` | `1920` | Frame width |
 | `-e`, `--streammux-height` | `720` | `1080` | Frame height |
@@ -149,18 +158,3 @@ topk=300
 ## Reference: 
 * https://github.com/marcoslucianops/DeepStream-Yolo-Pose
 * https://github.com/NVIDIA-AI-IOT/deepstream_python_apps
-
-## Project Lineage
-
-This repository is a continuation of the unmaintained project  
-[marcoslucianops/DeepStream-Yolo-Pose](https://github.com/marcoslucianops/DeepStream-Yolo-Pose).
-
-- The **original upstream implementation** (for DeepStream 6.0–6.3) is preserved in branch [`legacy-upstream`](https://github.com/eden-owo/DeepStream-Yolo-Pose/tree/legacy-upstream)  
-  and tagged as [`upstream-legacy-2023`](https://github.com/eden-owo/DeepStream-Yolo-Pose/releases/tag/upstream-legacy-2023).  
-  This keeps the original history intact for reference and reproducibility.
-
-- The **active development branch** is [`master`](https://github.com/eden-owo/DeepStream-Yolo-Pose/tree/master),  
-  updated for **DeepStream 7.1** and supporting newer models such as **YOLO11-Pose**.
-
-If you are looking for compatibility with DeepStream ≤ 6.3, please check the legacy branch/tag.  
-For DeepStream 7.1 and newer development, use this repository’s master branch.
