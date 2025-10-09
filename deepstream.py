@@ -123,13 +123,81 @@ def _attach_fall_event(batch_meta, frame_meta, obj_meta, body_degree, fall_state
     return True
 
 
-def _should_emit(frame_num, tracking_id):
-    """簡單的 per-tracking 節流，避免每幀都發。未追蹤或 tid<0 就不節流。"""
-    if tracking_id <= 0:
-        return True
-    last = _last_emit_frame.get(tracking_id, -10**9)
+def _attach_suitcase_event(batch_meta, frame_meta, obj_meta):
+    """掛載 suitcase 事件，讓 nvmsgconv/nvmsgbroker 送出 MQTT 訊息。"""
+    user_event_meta = pyds.nvds_acquire_user_meta_from_pool(batch_meta)
+    if not user_event_meta:
+        return False
+
+    msg_meta = pyds.alloc_nvds_event_msg_meta(user_event_meta)
+
+    msg_meta.bbox.top    = obj_meta.rect_params.top
+    msg_meta.bbox.left   = obj_meta.rect_params.left
+    msg_meta.bbox.width  = obj_meta.rect_params.width
+    msg_meta.bbox.height = obj_meta.rect_params.height
+
+    msg_meta.frameId    = frame_meta.frame_num
+    msg_meta.trackingId = long_to_uint64(getattr(obj_meta, "object_id", 0))
+    msg_meta.confidence = float(max(0.0, min(1.0, getattr(obj_meta, "confidence", 0.0))))
+
+    msg_meta.sensorId  = int(getattr(frame_meta, "source_id", 0))
+    msg_meta.placeId   = 0
+    msg_meta.moduleId  = 0
+    msg_meta.sensorStr = "sensor-{}".format(msg_meta.sensorId)
+
+    msg_meta.ts = pyds.alloc_buffer(33)
+    pyds.generate_ts_rfc3339(msg_meta.ts, 32)
+
+    try:
+        msg_meta.objType = pyds.NvDsObjectType.NVDS_OBJECT_TYPE_BAG
+    except AttributeError:
+        msg_meta.objType = pyds.NvDsObjectType.NVDS_OBJECT_TYPE_UNKNOWN
+    msg_meta.objClassId = int(getattr(obj_meta, "class_id", 0))
+    try:
+        msg_meta.type = pyds.NvDsEventType.NVDS_EVENT_CUSTOM
+    except AttributeError:
+        msg_meta.type = pyds.NvDsEventType.NVDS_EVENT_ENTRY
+
+    bag_ext = None
+    try:
+        bag_ext = pyds.alloc_nvds_vehicle_object()
+        bag_ext = pyds.NvDsVehicleObject.cast(bag_ext)
+        bag_ext.type = "suitcase"
+        bag_ext.make = ""
+        bag_ext.model = ""
+        bag_ext.color = ""
+        bag_ext.license = ""
+    except AttributeError:
+        bag_ext = None
+
+    if bag_ext:
+        msg_meta.extMsg = bag_ext
+        try:
+            msg_meta.extMsgSize = sys.getsizeof(pyds.NvDsVehicleObject)
+        except AttributeError:
+            msg_meta.extMsgSize = 0
+    else:
+        msg_meta.extMsg = None
+        msg_meta.extMsgSize = 0
+
+    user_event_meta.user_meta_data = msg_meta
+    user_event_meta.base_meta.meta_type = pyds.NvDsMetaType.NVDS_EVENT_MSG_META
+    pyds.nvds_add_user_meta_to_frame(frame_meta, user_event_meta)
+    return True
+
+
+def _should_emit(frame_num, tracking_id, event_tag=None):
+    """簡單的 per-tracking 節流，避免每幀都發；event_tag 可區分事件種類。"""
+    if event_tag is None:
+        if tracking_id <= 0:
+            return True
+        key = tracking_id
+    else:
+        key = (tracking_id if tracking_id > 0 else "untracked", event_tag)
+
+    last = _last_emit_frame.get(key, -10**9)
     if frame_num - last >= EMIT_GAP_FRAMES:
-        _last_emit_frame[tracking_id] = frame_num
+        _last_emit_frame[key] = frame_num
         return True
     return False
 
@@ -333,7 +401,7 @@ def tracker_src_pad_buffer_probe(pad, info, user_data):
             is_suitcase = (obj_meta.class_id == 28) or (label == "suitcase")
             if is_suitcase:
                 # 正確的 f-string
-                print(f"class={obj_meta.class_id}: confidence={obj_meta.confidence:.2f}")
+                # print(f"class={obj_meta.class_id}: confidence={obj_meta.confidence:.2f}")
 
                 # 顯示一個細框 + 文字
                 conf = float(getattr(obj_meta, "confidence", 0.0))
@@ -359,6 +427,18 @@ def tracker_src_pad_buffer_probe(pad, info, user_data):
                     obj_meta.mask_params.is_mask = 0
                 except Exception:
                     pass
+
+                oid = int(getattr(obj_meta, "object_id", -1))
+                tid = oid if oid not in (UNTRACKED_OID, 0, -1) else -1
+                tid_for_emit = tid if tid != -1 else 0
+                if _should_emit(frame_meta.frame_num, tid_for_emit, event_tag="suitcase"):
+                    ok = _attach_suitcase_event(
+                        batch_meta=batch_meta,
+                        frame_meta=frame_meta,
+                        obj_meta=obj_meta
+                    )
+                    if not ok:
+                        print("[suitcase-event] attach failed")
 
                 l_obj = l_obj.next
                 continue
