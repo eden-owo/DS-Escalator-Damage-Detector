@@ -35,7 +35,7 @@ Pose estimation
 
   Download the project and set up the working environment.
 
-```
+```bash
 git clone https://github.com/eden-owo/DS-Escalator-Damage-Detector.git
 cd DS-Escalator-Damage-Detector
 ```
@@ -76,13 +76,13 @@ Run the setup script to install dependencies inside the container.
 
 * DeepStream 7.1 on x86_64 linux platform
 
-  ```
+  ```bash
   export CUDA_VER=12.6
   ```
 
 * Compile the libs
 
-  ```
+  ```bash
   make -C nvdsinfer_custom_impl_Yolo
   make -C nvdsinfer_custom_impl_Yolo_pose
   make
@@ -104,7 +104,7 @@ Run the setup script to install dependencies inside the container.
 
 * MQTT Broker
 
-  ```  
+  ```bash  
   docker run --name mosq \
              --network ds-net \
              -it --rm -p 1883:1883 \
@@ -114,7 +114,7 @@ Run the setup script to install dependencies inside the container.
 
 * MQTT Subscriber
 
-  ```
+  ```bash
   docker run --rm -it \
              --network ds-net eclipse-mosquitto mosquitto_sub \
              -h mosq -p 1883 \
@@ -125,7 +125,7 @@ Run the setup script to install dependencies inside the container.
 
   Run the main script (MQTT publisher) in the container from Step 2:
 
-  ```
+  ```python
   python3 deepstream.py -s file:///opt/nvidia/deepstream/deepstream/samples/streams/sample_1080p_h264.mp4
                         -cip config_infer_primary_yoloV8_pose.txt
                         -cid config_infer_primary_yolo11.txt
@@ -152,13 +152,13 @@ Options
 ### Config Notes
 
 NMS
-```
+```ini
 cluster-mode=4
 IoU = 0.45
 ```
 
 Threshold
-```
+```ini
 [class-attrs-all]
 pre-cluster-threshold=0.25
 topk=300
