@@ -9,6 +9,12 @@ Supports multi-object tracking and event publishing via **MQTT** for edge-to-clo
 - ⚙️ Optimized for Jetson Orin with TensorRT acceleration  
 - 🔔 MQTT message publishing for remote alerts
 
+<p align="center">
+  <img src="pics/demo-fall-suitcase.png" alt="Fall and Suitcase Detection Demo" width="100%">
+  <br>
+  <em>Figure 1. Real-time fall and suitcase drop detection via DeepStream</em>
+</p>
+
 ---
 
 ## Verified models
@@ -120,7 +126,10 @@ Run the setup script to install dependencies inside the container.
   Run the main script (MQTT publisher) in the container from Step 2:
 
   ```
-  python3 deepstream.py -s file:///opt/nvidia/deepstream/deepstream/samples/streams/sample_1080p_h264.mp4 -c config_infer_primary_yolo11_pose.txt
+  python3 deepstream.py -s file:///opt/nvidia/deepstream/deepstream/samples/streams/sample_1080p_h264.mp4
+                        -cip config_infer_primary_yoloV8_pose.txt
+                        -cid config_infer_primary_yolo11.txt
+                        -t 0
   ```
 
 **NOTE**: The TensorRT engine file may take a very long time to generate (sometimes more than 10 minutes).
