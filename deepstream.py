@@ -27,6 +27,7 @@ STREAMMUX_WIDTH = 720
 STREAMMUX_HEIGHT = 1280
 GPU_ID = 0
 PERF_MEASUREMENT_INTERVAL_SEC = 5
+STREAMMUX_PUSH_TIMEOUT = 0  # µs; 0 表示資料一湊齊就推送，可提高輸出 FPS
 
 try:
     UNTRACKED_OID = pyds.UNTRACKED_OBJECT_ID
@@ -325,14 +326,8 @@ def extract_keypoints(obj_meta, stream_w, stream_h, conf_thr=None):
 
 
 def draw_pose_and_get_kps(frame_meta, obj_meta):
-    # 直接沿用你原本的畫點 / 畫線邏輯，只是先把 kps 算好回傳
-    kps = extract_keypoints(obj_meta, STREAMMUX_WIDTH, STREAMMUX_HEIGHT, conf_thr=0)
-
-    batch_meta = frame_meta.base_meta.batch_meta
-    display_meta = pyds.nvds_acquire_display_meta_from_pool(batch_meta)
-    pyds.nvds_add_display_meta_to_frame(frame_meta, display_meta)
-
-    return kps
+    # 回傳 keypoints，避免額外產生 display_meta 耗資源
+    return extract_keypoints(obj_meta, STREAMMUX_WIDTH, STREAMMUX_HEIGHT, conf_thr=0)
 
 
 # ====== [ADD] 命中條件時覆蓋紅色骨架（節省元素：預設只畫線，不重畫點） ======
@@ -388,6 +383,8 @@ def tracker_src_pad_buffer_probe(pad, info, user_data):
 
         current_index = frame_meta.source_id
         fall_state = 0   # 預設沒跌倒
+        processed_pose_tids = set()
+        processed_suitcase_tids = set()
 
         l_obj = frame_meta.obj_meta_list
         while l_obj:
@@ -395,11 +392,23 @@ def tracker_src_pad_buffer_probe(pad, info, user_data):
                 obj_meta = pyds.NvDsObjectMeta.cast(l_obj.data)
             except StopIteration:
                 break
-            
+
+            oid = int(getattr(obj_meta, "object_id", -1))
+            tid = oid if oid not in (UNTRACKED_OID, 0, -1) else -1
+            mask_size = getattr(obj_meta.mask_params, "size", 0)
+            has_pose = bool(mask_size and mask_size > 0)
+
             # --- 顯示 suitcase：允許在 OSD 畫出來 ---
             label = (obj_meta.obj_label or "").lower()
             is_suitcase = (obj_meta.class_id == 28) or (label == "suitcase")
             if is_suitcase:
+                if tid != -1:
+                    if tid in processed_suitcase_tids:
+                        obj_meta.rect_params.border_width = 0
+                        obj_meta.text_params.display_text = ''
+                        l_obj = l_obj.next
+                        continue
+                    processed_suitcase_tids.add(tid)
                 # 正確的 f-string
                 # print(f"class={obj_meta.class_id}: confidence={obj_meta.confidence:.2f}")
 
@@ -428,8 +437,6 @@ def tracker_src_pad_buffer_probe(pad, info, user_data):
                 except Exception:
                     pass
 
-                oid = int(getattr(obj_meta, "object_id", -1))
-                tid = oid if oid not in (UNTRACKED_OID, 0, -1) else -1
                 tid_for_emit = tid if tid != -1 else 0
                 if _should_emit(frame_meta.frame_num, tid_for_emit, event_tag="suitcase"):
                     ok = _attach_suitcase_event(
@@ -443,6 +450,29 @@ def tracker_src_pad_buffer_probe(pad, info, user_data):
                 l_obj = l_obj.next
                 continue
             # ----------------------------------------
+
+            if not has_pose:
+                obj_meta.rect_params.border_width = 0
+                obj_meta.text_params.display_text = ''
+                try:
+                    obj_meta.mask_params.is_mask = 0
+                except Exception:
+                    pass
+                l_obj = l_obj.next
+                continue
+
+            if tid != -1 and tid in processed_pose_tids:
+                obj_meta.rect_params.border_width = 0
+                obj_meta.text_params.display_text = ''
+                try:
+                    obj_meta.mask_params.is_mask = 0
+                except Exception:
+                    pass
+                l_obj = l_obj.next
+                continue
+
+            if tid != -1:
+                processed_pose_tids.add(tid)
 
 
             obj_meta.rect_params.border_width = 0
@@ -467,9 +497,6 @@ def tracker_src_pad_buffer_probe(pad, info, user_data):
                 body_degree = abs(left_deg + right_deg) / 2.0
 
             # 追蹤 ID（未追蹤則 -1：只做即時，不做累積）
-            oid = int(getattr(obj_meta, "object_id", -1))
-            tid = oid if oid not in (UNTRACKED_OID, 0, -1) else -1
-
             # 累積/衰減警報保持幀
             if body_degree is not None and body_degree >= DETECT_DEGREE:
                 if tid != -1:
@@ -712,7 +739,7 @@ def main():
     sys.stdout.write('\n')
 
     streammux.set_property('batch-size', STREAMMUX_BATCH_SIZE)
-    streammux.set_property('batched-push-timeout', 25000)
+    streammux.set_property('batched-push-timeout', STREAMMUX_PUSH_TIMEOUT)
     streammux.set_property('width', STREAMMUX_WIDTH)
     streammux.set_property('height', STREAMMUX_HEIGHT)
     streammux.set_property('enable-padding', 1)
@@ -893,7 +920,7 @@ def main():
 
 def parse_args():
     global SOURCE, CONFIG_INFER_POSE, CONFIG_INFER_DETECT, STREAMMUX_BATCH_SIZE, STREAMMUX_WIDTH, STREAMMUX_HEIGHT, GPU_ID, \
-        PERF_MEASUREMENT_INTERVAL_SEC
+        PERF_MEASUREMENT_INTERVAL_SEC, STREAMMUX_PUSH_TIMEOUT
 
     parser = argparse.ArgumentParser(description='DeepStream')
     parser.add_argument('-s', '--source', required=True, help='Source stream/file')
@@ -904,6 +931,8 @@ def parse_args():
     parser.add_argument('-e', '--streammux-height', type=int, default=1280, help='Streammux height (default: 1080)')
     parser.add_argument('-g', '--gpu-id', type=int, default=0, help='GPU id (default: 0)')
     parser.add_argument('-f', '--fps-interval', type=int, default=5, help='FPS measurement interval (default: 5)')
+    parser.add_argument('-t', '--streammux-timeout', type=int, default=STREAMMUX_PUSH_TIMEOUT,
+                        help='nvstreammux batched push timeout in microseconds; set 0 for ASAP push (default: 0)')
     args = parser.parse_args()
     if args.source == '':
         sys.stderr.write('ERROR: Source not found\n')
@@ -923,6 +952,7 @@ def parse_args():
     STREAMMUX_HEIGHT = args.streammux_height
     GPU_ID = args.gpu_id
     PERF_MEASUREMENT_INTERVAL_SEC = args.fps_interval
+    STREAMMUX_PUSH_TIMEOUT = max(0, args.streammux_timeout)
 
 
 if __name__ == '__main__':
