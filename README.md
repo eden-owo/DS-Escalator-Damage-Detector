@@ -48,6 +48,10 @@ Prerequisites: NVIDIA driver, Docker, and nvidia-container-toolkit must be insta
 ```bash
 xhost +local:root
 ```
+(Optional) For the same network in dockers, run: docker network create ds-net.
+```bash
+docker network create ds-net
+```
 
 Launch the Container
 ```bash
