@@ -6,7 +6,7 @@ net-scale-factor=0.0039215697906911373
 model-color-format=0
 
 # 先用 ONNX 讓 DeepStream 自動重建 engine
-onnx-file=/apps/yolov8s-pose.onnx
+onnx-file=/apps/model/yolov8s-pose.onnx
 # 先註解或刪除舊 engine，避免拿到不同驅動/不同 shape 的舊快取
 # model-engine-file=/apps/model/yolov8s-pose.onnx_b1_gpu0_fp32.engine
 model-engine-file=/apps/model/yolov8s-pose.onnx_b1_gpu0_fp16.engine
