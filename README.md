@@ -23,7 +23,7 @@ Deepstream is recommended for about 100% faster computation.
 | Model | GPU usage | CPU usage | FPS |
 |:--|:--:|:--:|:--:|
 | OpenCV | 40% | 55% | 24 FPS |
-| [TensorRT + OpenCV](https://github.com/eden-owo/Person-suitcase-motion-tracker) | 60% | 70% | 35 FPS |
+| [TensorRT + OpenCV](https://github.com/eden-owo/Person-suitcase-motion-tracker) | 80% | 80% | 37 FPS |
 | Deepstream | 30% | 90% | 55 FPS |
 
 ---
