@@ -1,0 +1,9 @@
+# 忽略 C/C++ 編譯與執行檔
+*.o
+*.so
+deepstream  # 您編譯出來的主執行檔名稱
+
+# 忽略 Python 虛擬環境與快取 (針對 uv 與 pyds)
+.venv/
+__pycache__/
+*.whl
