@@ -22,6 +22,7 @@ fi
 
 # 安裝 ultralytics 與 onnx 家族
 cd /opt/ultralytics
+pip install uv
 uv pip install onnx onnxslim onnxruntime
 
 echo "請注意：正在處理 DeepStream 8.0 的 pyds 安裝..."
@@ -74,5 +75,5 @@ fi
 # DeepStream 7.1 & 8 is incompatible with NumPy 2.x, so force reinstall numpy==1.26.0
 uv pip install --force-reinstall numpy==1.26.0
 uv pip install "PyGObject==3.48.2"
-
+source .venv/bin/activate
 echo "[bootstrap] Done, environment ready."

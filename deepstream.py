@@ -1,6 +1,6 @@
 import gi
 gi.require_version('Gst', '1.0')
-from gi.repository import Gst, GLib
+from gi.repository import Gst, GLib, GstRtspServer
 
 import os
 import sys
@@ -53,6 +53,14 @@ IDX = {"LS": 5, "RS": 6, "LH": 11, "RH": 12}
 # 事件發送節流（同一個 tracking ID 每 N 幀才送一次，避免刷頻）
 EMIT_GAP_FRAMES = 30
 _last_emit_frame = {}  # tid -> last_frame_num
+
+def is_jetson():
+    """精準判斷是否為 Jetson 嵌入式設備，排除 GB10 等 ARM 伺服器"""
+    try:
+        with open('/sys/devices/soc0/family', 'r') as f:
+            return 'Tegra' in f.read()
+    except FileNotFoundError:
+        return False
 
 # --- fallback: convert signed/py-int to unsigned 64 for DeepStream trackingId ---
 def long_to_uint64(val):
@@ -573,7 +581,7 @@ def decodebin_child_added(child_proxy, Object, name, user_data):
     if name.find('nvv4l2decoder') != -1:
         Object.set_property('drop-frame-interval', 0)
         Object.set_property('num-extra-surfaces', 1)
-        if is_aarch64():
+        if is_jetson():
             Object.set_property('enable-max-performance', 1)
         else:
             Object.set_property('cudadec-memtype', 0)
@@ -624,10 +632,6 @@ def bus_call(bus, message, user_data):
         sys.stderr.write('ERROR: %s: %s\n' % (err, debug))
         loop.quit()
     return True
-
-
-def is_aarch64():
-    return platform.uname()[4] == 'aarch64'
 
 def main():
     loop = GLib.MainLoop()
@@ -683,17 +687,36 @@ def main():
         sys.stderr.write('ERROR: Failed to create nvdsosd\n')
         sys.exit(1)
 
-    sink = None
-    if is_aarch64():
-        sink = Gst.ElementFactory.make('nv3dsink', 'nv3dsink')
-        if not sink:
-            sys.stderr.write('ERROR: Failed to create nv3dsink\n')
-            sys.exit(1)
-    else:
-        sink = Gst.ElementFactory.make('nveglglessink', 'nveglglessink')
-        if not sink:
-            sys.stderr.write('ERROR: Failed to create nveglglessink\n')
-            sys.exit(1)
+    # sink = None
+    # if is_aarch64():
+    #     sink = Gst.ElementFactory.make('nv3dsink', 'nv3dsink')
+    #     if not sink:
+    #         sys.stderr.write('ERROR: Failed to create nv3dsink\n')
+    #         sys.exit(1)
+    # else:
+    #     sink = Gst.ElementFactory.make('nveglglessink', 'nveglglessink')
+    #     if not sink:
+    #         sys.stderr.write('ERROR: Failed to create nveglglessink\n')
+    #         sys.exit(1)
+    
+    nvvidconv_postosd = Gst.ElementFactory.make("nvvideoconvert", "convertor_postosd")
+    caps = Gst.ElementFactory.make("capsfilter", "filter")
+    caps.set_property("caps", Gst.Caps.from_string("video/x-raw(memory:NVMM), format=I420"))
+    
+    # 影像編碼器 (H.264)
+    encoder = Gst.ElementFactory.make("nvv4l2h264enc", "encoder")
+    encoder.set_property("bitrate", 4000000) # 設定 4Mbps 畫質
+    encoder.set_property("insert-sps-pps", 1)  # 重要：讓 VLC 能解碼 (包含 x86)
+    if is_jetson():
+        encoder.set_property("preset-level", 1)
+        
+    rtppay = Gst.ElementFactory.make("rtph264pay", "rtppay")
+    sink = Gst.ElementFactory.make("udpsink", "udpsink")
+    sink.set_property('host', '224.224.255.255')
+    sink.set_property('port', 5400) # 本機中繼用的 UDP Port
+    sink.set_property('async', False)
+    sink.set_property('sync', 1)
+
 
     queue_det_out  = Gst.ElementFactory.make("queue", "queue_det_out")
     fakesink_det   = Gst.ElementFactory.make("fakesink", "fakesink_det")
@@ -735,7 +758,7 @@ def main():
     sys.stdout.write('STREAMMUX_HEIGHT: %d\n' % STREAMMUX_HEIGHT)
     sys.stdout.write('GPU_ID: %d\n' % GPU_ID)
     sys.stdout.write('PERF_MEASUREMENT_INTERVAL_SEC: %d\n' % PERF_MEASUREMENT_INTERVAL_SEC)
-    sys.stdout.write('JETSON: %s\n' % ('TRUE' if is_aarch64() else 'FALSE'))
+    sys.stdout.write('JETSON: %s\n' % ('TRUE' if is_jetson() else 'FALSE'))
     sys.stdout.write('\n')
 
     streammux.set_property('batch-size', STREAMMUX_BATCH_SIZE)
@@ -766,6 +789,7 @@ def main():
 
     if 'file://' in SOURCE:
         streammux.set_property('live-source', 0)
+        sink.set_property('sync', 1)  # 使本地影片依照實際 FPS 播放，避免瞬間 EOF
 
     if tracker.find_property('enable_batch_process') is not None:
         tracker.set_property('enable_batch_process', 1)
@@ -782,7 +806,7 @@ def main():
     msgbroker.set_property("topic", "ds/events")                  # topic 分開指定
 
 
-    if not is_aarch64():
+    if not is_jetson():
         streammux.set_property('nvbuf-memory-type', 0)
         streammux.set_property('gpu_id', GPU_ID)
         pgie_pose.set_property('gpu_id', GPU_ID)
@@ -798,7 +822,8 @@ def main():
                 tee_main, queue_pose, pgie_pose,
                 queue_det,  pgie_det,
                 tracker,  # 單一 tracker（接在 pose 分支後）
-                tee, queue_osd, converter, osd, sink,
+                tee, queue_osd, converter, osd, 
+                nvvidconv_postosd, caps, encoder, rtppay, sink,
                 queue_msg, msgconv, msgbroker, 
                 queue_det_out, fakesink_det]:
         pipeline.add(elem)
@@ -833,7 +858,11 @@ def main():
 
     queue_osd.link(converter)
     converter.link(osd)
-    osd.link(sink)
+    osd.link(nvvidconv_postosd)
+    nvvidconv_postosd.link(caps)
+    caps.link(encoder)
+    encoder.link(rtppay)
+    rtppay.link(sink)
     # === osd pipeline ===
 
     # === msg pipeline ===
@@ -907,6 +936,19 @@ def main():
     else:   
         tracker_src_pad.add_probe(Gst.PadProbeType.BUFFER, tracker_src_pad_buffer_probe, 0)
 
+    # --- 啟動 RTSP Server ---
+    server = GstRtspServer.RTSPServer.new()
+    server.props.service = "%d" % 8554
+    server.attach(None)
+    
+    factory = GstRtspServer.RTSPMediaFactory.new()
+    factory.set_launch( "( udpsrc name=pay0 port=5400 buffer-size=524288 caps=\"application/x-rtp, media=video, clock-rate=90000, encoding-name=(string)H264, payload=96 \" )" )
+    factory.set_shared(True)
+    server.get_mount_points().add_factory("/ds-test", factory)
+    
+    print("\n\n*** DeepStream: 已經開啟 RTSP 串流！ ***")
+    print("*** 請用 VLC 打開 rtsp://<機器IP>:8554/ds-test 查看畫面 ***\n\n")
+
     # 啟動 pipeline，進入主迴圈 (loop.run)，直到 EOS 或錯誤才結束
     pipeline.set_state(Gst.State.PLAYING)
     sys.stdout.write('\n')
@@ -915,6 +957,8 @@ def main():
     except:
         pass
     pipeline.set_state(Gst.State.NULL)
+    sys.stdout.write('Pipeline stopped normally.\n')
+    sys.exit(0)  # <--- 加上這一行
     sys.stdout.write('\n')
 
 

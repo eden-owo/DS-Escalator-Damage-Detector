@@ -7,3 +7,6 @@ deepstream  # 您編譯出來的主執行檔名稱
 .venv/
 __pycache__/
 *.whl
+
+model/*
+pics/*.mp4
