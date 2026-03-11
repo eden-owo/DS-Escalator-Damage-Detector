@@ -119,6 +119,7 @@ Run the setup script to install dependencies inside the container.
 
 ```bash
 # Export YOLOv8-Pose model
+cd model/
 python ../utils/export_yoloV8_pose.py -w ../model/yolov8s-pose.pt
 
 # Export YOLO11 detection model
@@ -154,13 +155,8 @@ python ../utils/export_yolo11.py -w ../model/yolo11s.pt
   Run the main script (MQTT publisher) in the container from Step 2:
 
   ```python
-  python3 deepstream.py -s file:///opt/nvidia/deepstream/deepstream/samples/streams/sample_1080p_h264.mp4
-                        -cip config_infer_primary_yoloV8_pose.txt
-                        -cid config_infer_primary_yolo11.txt
-                        -t 0
+  python3 deepstream.py -s file:///opt/nvidia/deepstream/deepstream/samples/streams/sample_1080p_h264.mp4 -cip config_infer_primary_yoloV8_pose.txt -cid config_infer_primary_yolo11.txt -t 0
   ```
-
-**NOTE**: The TensorRT engine file may take a very long time to generate (sometimes more than 10 minutes).
 
 Options
 
