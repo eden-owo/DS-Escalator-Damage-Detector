@@ -112,6 +112,19 @@ Run the setup script to install dependencies inside the container.
 
   Create a dedicated directory for the model, then follow [the documentation](./docs/) to set up the model and export it as an .onnx file.
 
+> [!WARNING]
+> **Do NOT use the Ultralytics built-in export tool** (`yolo export` / `model.export()`).
+> Using it will cause **detection box coordinate offset errors** (bounding boxes displaced toward the top-left corner).
+> Always use the custom export scripts located in `utils/` instead:
+
+```bash
+# Export YOLOv8-Pose model
+python ../utils/export_yoloV8_pose.py -w ../model/yolov8s-pose.pt
+
+# Export YOLO11 detection model
+python ../utils/export_yolo11.py -w ../model/yolo11s.pt
+```
+
 
 ### 6. Run MQTT Broker and Subscriber in separate Docker containers
 
